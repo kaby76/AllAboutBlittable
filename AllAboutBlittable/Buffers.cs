@@ -4,15 +4,28 @@ using System.Linq;
 using System.Reflection.Emit;
 using System.Runtime.InteropServices;
 using System.Runtime.Serialization;
+using System.Text;
 
-namespace AllAboutBlittable
+namespace GpuCore
 {
 
-    public class Blittable
+    /// <summary>
+    /// This code marshals C#/Net data structures that have an unknown implementation to/from
+    /// the implementation for NVIDIA GPUs.
+    /// 
+    /// In particular:
+    /// * Object references are implemented as pointers.
+    /// * Blittable types are implemented as is.
+    /// * Char is implemented as UInt16.
+    /// * Bool is implemented as Byte, with true = 1, false = 0.
+    /// </summary>
+    public class Buffers
     {
         /// <summary>
-        /// This code to check if a type is blittable. From http://aakinshin.net/blog/post/blittable/
+        /// This code to check if a type is blittable.
+        /// See http://aakinshin.net/blog/post/blittable/
         /// Original from https://stackoverflow.com/questions/10574645/the-fastest-way-to-check-if-a-type-is-blittable/31485271#31485271
+        /// Purportedly, System.Decimal is supposed to not be blittable, but appears on Windows 10, VS 2017, NF 4.6.
         /// </summary>
 
         public static bool IsBlittable<T>()
@@ -45,17 +58,17 @@ namespace AllAboutBlittable
         }
 
         /// <summary>
-        /// Data class used by CreateBlittableType in order to create a blittable type
+        /// Asm class used by CreateImplementationType in order to create a blittable type
         /// corresponding to a host type.
         /// </summary>
-        class Data
+        class Asm
         {
             public System.Reflection.AssemblyName assemblyName;
             public AssemblyBuilder ab;
             public ModuleBuilder mb;
             static int v = 1;
 
-            public Data()
+            public Asm()
             {
                 assemblyName = new System.Reflection.AssemblyName("DynamicAssembly" + v++);
                 ab = AppDomain.CurrentDomain.DefineDynamicAssembly(
@@ -65,20 +78,24 @@ namespace AllAboutBlittable
             }
         }
 
+        static Asm _asm = new Asm();
+
         public static bool IsStruct(System.Type t)
         {
             return t.IsValueType && !t.IsPrimitive && !t.IsEnum;
         }
 
-        private static Stack<bool> level = new Stack<bool>();
-        static Data data = new Data();
+        static Dictionary<string, string> _type_name_map = new Dictionary<string, string>();
 
-        public static Type CreateBlittableType(Type hostType, bool declare_parent_chain, bool declare_flatten_structure)
+        public static Type CreateImplementationType(Type hostType, bool declare_parent_chain = true, bool declare_flatten_structure = false)
         {
-            level.Push(true);
             try
             {
                 // Let's start with basic types.
+                if (hostType.FullName.Equals("System.Object"))
+                {
+                    return typeof(System.Object);
+                }
                 if (hostType.FullName.Equals("System.Int16"))
                 {
                     return typeof(System.Int16);
@@ -129,33 +146,31 @@ namespace AllAboutBlittable
                 {
                     // First, declare base type
                     Type bt = hostType.BaseType;
-                    if (bt != null && !bt.FullName.Equals("System.Object"))
+                    bbt = bt;
+                    if (bt != null && !bt.FullName.Equals("System.Object") && !bt.FullName.Equals("System.ValueType"))
                     {
-                        bbt = CreateBlittableType(bt, declare_parent_chain, declare_flatten_structure);
+                        bbt = CreateImplementationType(bt, declare_parent_chain, declare_flatten_structure);
                     }
                 }
 
                 name = hostType.FullName;
+                _type_name_map.TryGetValue(name, out string alt);
                 tf = new System.Reflection.TypeFilter((Type t, object o) =>
                 {
-                    return t.FullName == name;
+                    return t.FullName == name || t.FullName == alt;
                 });
 
                 // Find if blittable type for hostType was already performed.
-                Type[] types = data.mb.FindTypes(tf, null);
+                Type[] types = _asm.mb.FindTypes(tf, null);
 
                 // If blittable type was not created, create one with all fields corresponding
                 // to that in host, with special attention to arrays.
-                if (types.Length != 0 && level.Count == 1)
+                if (types.Length != 0)
                     return types[0];
-
 
                 if (hostType.IsArray)
                 {
-                    if (level.Count() > 1)
-                        return typeof(System.IntPtr);
-
-                    Type elementType = CreateBlittableType(hostType.GetElementType(), declare_parent_chain,
+                    Type elementType = CreateImplementationType(hostType.GetElementType(), declare_parent_chain,
                         declare_flatten_structure);
                     object array_obj = Array.CreateInstance(elementType, 0);
                     Type array_type = array_obj.GetType();
@@ -163,11 +178,12 @@ namespace AllAboutBlittable
                     // For arrays, convert into a struct with first field being a
                     // pointer, and the second field a length.
 
-                    var tb = data.mb.DefineType(
+                    var tb = _asm.mb.DefineType(
                         array_type.FullName,
                         System.Reflection.TypeAttributes.Public
                         | System.Reflection.TypeAttributes.SequentialLayout
                         | System.Reflection.TypeAttributes.Serializable);
+                    _type_name_map[hostType.FullName] = tb.FullName;
 
                     // Convert byte, int, etc., in host type to pointer in blittable type.
                     // With array, we need to also encode the length.
@@ -176,15 +192,12 @@ namespace AllAboutBlittable
 
                     return tb.CreateType();
                 }
-                else if (IsStruct(hostType) || hostType.IsClass)
+                else if (IsStruct(hostType))
                 {
-                    if (level.Count() > 1)
-                        return typeof(System.IntPtr);
-
                     TypeBuilder tb = null;
                     if (bbt != null)
                     {
-                        tb = data.mb.DefineType(
+                        tb = _asm.mb.DefineType(
                             name,
                             System.Reflection.TypeAttributes.Public
                             | System.Reflection.TypeAttributes.SequentialLayout
@@ -193,12 +206,13 @@ namespace AllAboutBlittable
                     }
                     else
                     {
-                        tb = data.mb.DefineType(
+                        tb = _asm.mb.DefineType(
                             name,
                             System.Reflection.TypeAttributes.Public
                             | System.Reflection.TypeAttributes.SequentialLayout
                             | System.Reflection.TypeAttributes.Serializable);
                     }
+                    _type_name_map[name] = tb.FullName;
                     Type ht = hostType;
                     while (ht != null)
                     {
@@ -212,8 +226,60 @@ namespace AllAboutBlittable
                         {
                             // For non-array type fields, just define the field as is.
                             // Recurse
-                            Type elementType = CreateBlittableType(field.FieldType, declare_parent_chain,
+                            Type elementType = CreateImplementationType(field.FieldType, declare_parent_chain,
                                 declare_flatten_structure);
+                            // If elementType is a reference or array, then we need to convert it to a IntPtr.
+                            if (elementType.IsClass || elementType.IsArray)
+                                elementType = typeof(System.IntPtr);
+                            tb.DefineField(field.Name, elementType, System.Reflection.FieldAttributes.Public);
+                        }
+                        if (declare_flatten_structure)
+                            ht = ht.BaseType;
+                        else
+                            ht = null;
+                    }
+                    // Base type will be used.
+                    return tb.CreateType();
+                }
+                else if (hostType.IsClass)
+                {
+                    TypeBuilder tb = null;
+                    if (bbt != null)
+                    {
+                        tb = _asm.mb.DefineType(
+                            name,
+                            System.Reflection.TypeAttributes.Public
+                            | System.Reflection.TypeAttributes.SequentialLayout
+                            | System.Reflection.TypeAttributes.Serializable,
+                            bbt);
+                    }
+                    else
+                    {
+                        tb = _asm.mb.DefineType(
+                            name,
+                            System.Reflection.TypeAttributes.Public
+                            | System.Reflection.TypeAttributes.SequentialLayout
+                            | System.Reflection.TypeAttributes.Serializable);
+                    }
+                    _type_name_map[name] = tb.FullName;
+                    Type ht = hostType;
+                    while (ht != null)
+                    {
+                        var fields = ht.GetFields(
+                            System.Reflection.BindingFlags.Instance
+                            | System.Reflection.BindingFlags.NonPublic
+                            | System.Reflection.BindingFlags.Public
+                            | System.Reflection.BindingFlags.Static);
+                        var fields2 = ht.GetFields();
+                        foreach (var field in fields)
+                        {
+                            // For non-array type fields, just define the field as is.
+                            // Recurse
+                            Type elementType = CreateImplementationType(field.FieldType, declare_parent_chain,
+                                declare_flatten_structure);
+                            // If elementType is a reference or array, then we need to convert it to a IntPtr.
+                            if (elementType.IsClass || elementType.IsArray)
+                                elementType = typeof(System.IntPtr);
                             tb.DefineField(field.Name, elementType, System.Reflection.FieldAttributes.Public);
                         }
                         if (declare_flatten_structure)
@@ -234,13 +300,10 @@ namespace AllAboutBlittable
             }
             finally
             {
-                level.Pop();
             }
         }
 
         static Dictionary<object, IntPtr> _allocated_objects = new Dictionary<object, IntPtr>();
-
-        static Dictionary<Type, Type> _original_to_blittable_type_map = new Dictionary<Type, Type>();
 
         /// <summary>
         /// This method copies from a managed type into a blittable managed type.
@@ -248,7 +311,7 @@ namespace AllAboutBlittable
         /// </summary>
         /// <param name="from"></param>
         /// <param name="to"></param>
-        public static void CopyToManagedBlittableType(object from, out object to)
+        public static void DeepCopyToImplementation(object from, out object to)
         {
             try
             {
@@ -278,6 +341,11 @@ namespace AllAboutBlittable
                 Type hostType = from.GetType();
 
                 // Let's start with basic types.
+                if (hostType.FullName.Equals("System.Object"))
+                {
+                    to = from;
+                    return;
+                }
                 if (hostType.FullName.Equals("System.Int16"))
                 {
                     to = (System.Int16)from;
@@ -337,7 +405,7 @@ namespace AllAboutBlittable
                 //    Type bt = hostType.BaseType;
                 //    if (bt != null && !bt.FullName.Equals("System.Object"))
                 //    {
-                //        bbt = CreateBlittableType(bt, declare_parent_chain, declare_flatten_structure);
+                //        bbt = CreateImplementationType(bt, declare_parent_chain, declare_flatten_structure);
                 //    }
                 //}
 
@@ -349,7 +417,7 @@ namespace AllAboutBlittable
                 });
 
                 // Find blittable type for hostType.
-                Type[] types = data.mb.FindTypes(tf, null);
+                Type[] types = _asm.mb.FindTypes(tf, null);
 
                 if (types.Length == 0) throw new Exception("Unknown type.");
                 Type blittable_type = types[0];
@@ -361,8 +429,7 @@ namespace AllAboutBlittable
                     var a = (Array)from;
                     unsafe
                     {
-                        var ptr = New(blittable_type, a.Length);
-                        var intptr = new IntPtr(ptr);
+                        var intptr = New(blittable_type, a.Length);
                         var len = a.Length;
 
                         System.Reflection.FieldInfo[] tfi = blittable_type.GetFields();
@@ -374,8 +441,8 @@ namespace AllAboutBlittable
                                 var tfield = tfi.Where(k => k.Name == fi.Name).FirstOrDefault();
                                 if (tfield == null)
                                     throw new ArgumentException("Field not found.");
-                                CopyToNativeArray(a, intptr,
-                                    CreateBlittableType(a.GetType().GetElementType(), false, false));
+                                CopyToGPUBuffer(a, intptr,
+                                    CreateImplementationType(a.GetType().GetElementType(), false, false));
                                 tfield.SetValue(to, intptr);
                             }
                             if (na == "len")
@@ -407,13 +474,13 @@ namespace AllAboutBlittable
                         String na = fi.Name;
                         // Convert.
                         object res;
-                        CopyToManagedBlittableType(field_value, out res);
+                        DeepCopyToImplementation(field_value, out res);
                         // Copy.
                         var tfield = tfi.Where(k => k.Name == fi.Name).FirstOrDefault();
                         if (tfield == null)
                             throw new ArgumentException("Field not found.");
                         // Note, if field is array, class, or struct, convert to IntPtr.
-                        if (fi.FieldType.IsArray || fi.FieldType.IsClass || IsStruct(fi.FieldType))
+                        if (fi.FieldType.IsArray || fi.FieldType.IsClass)
                         {
                             if (res != null)
                             {
@@ -445,7 +512,7 @@ namespace AllAboutBlittable
             }
         }
 
-        public static void CopyFromManagedBlittableType(object from, out object to, Type target_type)
+        public static void DeepCopyFromImplementation(object from, out object to, Type target_type)
         {
             Type f_type = from.GetType();
             Type t_type = target_type;
@@ -470,7 +537,7 @@ namespace AllAboutBlittable
                         return;
                     }
                     // Get blittable type for object.
-                    f_type = CreateBlittableType(t_type, false, false);
+                    f_type = CreateImplementationType(t_type, false, false);
                     var xxx = (IntPtr)from;
                     System.Console.WriteLine(xxx.ToString("x"));
                     // Make sure it can be reversed.
@@ -486,6 +553,11 @@ namespace AllAboutBlittable
                     return;
                 }
 
+                if (t_type.FullName.Equals("System.Object"))
+                {
+                    to = from;
+                    return;
+                }
                 if (t_type.FullName.Equals("System.Int16"))
                 {
                     to = (System.Int16)from;
@@ -548,7 +620,7 @@ namespace AllAboutBlittable
                 //    Type bt = hostType.BaseType;
                 //    if (bt != null && !bt.FullName.Equals("System.Object"))
                 //    {
-                //        bbt = CreateBlittableType(bt, declare_parent_chain, declare_flatten_structure);
+                //        bbt = CreateImplementationType(bt, declare_parent_chain, declare_flatten_structure);
                 //    }
                 //}
 
@@ -590,7 +662,7 @@ namespace AllAboutBlittable
                         }
 
                         var to_array = Array.CreateInstance(t_type.GetElementType(), new int[1] { len });
-                        CopyFromNativeArray(intptr_src, to_array, t_type.GetElementType());
+                        CopyFromGPUBuffer(intptr_src, to_array, t_type.GetElementType());
                         to = to_array;
                     }
                     return;
@@ -610,7 +682,7 @@ namespace AllAboutBlittable
                             String na = fi.Name;
                             // Convert.
                             object res;
-                            CopyFromManagedBlittableType(field_value, out res, ti.FieldType);
+                            DeepCopyFromImplementation(field_value, out res, ti.FieldType);
                             var tfield = tfi.Where(k => k.Name == fi.Name).FirstOrDefault();
                             if (tfield == null)
                                 throw new ArgumentException("Field not found.");
@@ -630,39 +702,21 @@ namespace AllAboutBlittable
             }
         }
 
-        public static void CopyFromPtrToBlittable(IntPtr ptr, object blittable_object)
-        {
-            Marshal.PtrToStructure(ptr, blittable_object);
-        }
-
-        public static IntPtr CreateNativeArray(int length, int blittable_element_size)
-        {
-            IntPtr cpp_array = Marshal.AllocHGlobal(blittable_element_size * length);
-            return cpp_array;
-        }
-
-        public static IntPtr CreateNativeArray(Array from, Type blittable_element_type)
-        {
-            int size_element = Marshal.SizeOf(blittable_element_type);
-            IntPtr cpp_array = Marshal.AllocHGlobal(size_element * from.Length);
-            return cpp_array;
-        }
-
-        public static IntPtr CopyToNativeArray(Array from, IntPtr cpp_array, Type blittable_element_type)
+        public static IntPtr CopyToGPUBuffer(Array from, IntPtr cpp_array, Type blittable_element_type)
         {
             IntPtr byte_ptr = cpp_array;
             int size_element = Marshal.SizeOf(blittable_element_type);
             for (int i = 0; i < from.Length; ++i)
             {
                 object obj = Activator.CreateInstance(blittable_element_type);
-                CopyToManagedBlittableType(from.GetValue(i), out obj);
+                DeepCopyToImplementation(from.GetValue(i), out obj);
                 Marshal.StructureToPtr(obj, byte_ptr, false);
                 byte_ptr = new IntPtr((long)byte_ptr + size_element);
             }
             return cpp_array;
         }
 
-        public static IntPtr CopyFromNativeArray(IntPtr a, Array to, Type blittable_element_type)
+        public static IntPtr CopyFromGPUBuffer(IntPtr a, Array to, Type blittable_element_type)
         {
             int size_element = Marshal.SizeOf(blittable_element_type);
             IntPtr mem = a;
@@ -671,49 +725,47 @@ namespace AllAboutBlittable
                 // copy.
                 object obj = Marshal.PtrToStructure(mem, blittable_element_type);
                 object to_obj = to.GetValue(i);
-                CopyFromManagedBlittableType(obj, out to_obj, to.GetType().GetElementType());
+                DeepCopyFromImplementation(obj, out to_obj, to.GetType().GetElementType());
                 to.SetValue(to_obj, i);
                 mem = new IntPtr((long)mem + size_element);
             }
             return a;
         }
 
-        public static void OutputType(System.Type type)
+        public static string OutputType(System.Type type)
         {
             if (type.IsArray)
             {
-                System.Console.WriteLine(type.GetElementType().FullName + "[]");
-                return;
+                return type.GetElementType().FullName + "[]";
             }
             if (type.IsValueType && !IsStruct(type))
             {
-                System.Console.WriteLine(type.FullName);
-                return;
+                return type.FullName;
             }
+            StringBuilder sb = new StringBuilder();
             var fields = type.GetFields(
                 System.Reflection.BindingFlags.Instance
                 | System.Reflection.BindingFlags.NonPublic
                 | System.Reflection.BindingFlags.Public
                 | System.Reflection.BindingFlags.Static);
             if (type.IsValueType && IsStruct(type))
-                Console.WriteLine("struct {");
+                sb.Append("struct {").AppendLine();
             else if (type.IsClass)
-                Console.WriteLine("class {");
+                sb.Append("class {").AppendLine();
             foreach (var field in fields)
-            {
-                Console.WriteLine("{0} = {1}", field.Name, field.FieldType.Name);
-            }
-            Console.WriteLine("}");
+                sb.AppendFormat("{0} = {1}", field.Name, field.FieldType.Name).AppendLine();
+            sb.Append("}").AppendLine();
+            return sb.ToString();
         }
 
-
         /// <summary>
+        /// Allocated a GPU managed buffer.
         /// Code based on https://www.codeproject.com/Articles/32125/Unmanaged-Arrays-in-C-No-Problem
         /// </summary>
-        public static unsafe void* New(Type t, int elementCount)
+        public static IntPtr New(Type t, int elementCount)
         {
             if (!IsBlittable(t)) throw new Exception("Fucked!");
-            return Marshal.AllocHGlobal(Marshal.SizeOf(t) * elementCount).ToPointer();
+            return Marshal.AllocHGlobal(Marshal.SizeOf(t) * elementCount);
         }
 
         public static unsafe void* NewAndInit(Type t, int elementCount)
@@ -738,8 +790,7 @@ namespace AllAboutBlittable
                 new IntPtr(Marshal.SizeOf(typeof(T)) * newElementCount))).ToPointer();
         }
 
-
-        public static unsafe void Copy(IntPtr destPtr, IntPtr srcPtr, int size)
+        public static unsafe void Cp(IntPtr destPtr, IntPtr srcPtr, int size)
         {
             unsafe
             {

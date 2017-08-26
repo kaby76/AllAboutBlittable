@@ -1,11 +1,12 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.InteropServices;
 using Swigged.Cuda;
 
-namespace AllAboutBlittable
+namespace GpuCore
 {
-    struct StructWithInt32
+    public struct StructWithInt32
     {
         public int a;
         public int b;
@@ -55,6 +56,22 @@ namespace AllAboutBlittable
     {
         public UInt128 UInt128;
         public char Char;
+    }
+
+    public struct StructStruct
+    {
+        public int a;
+        public StructWithInt32 b;
+    }
+
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct contact_info
+    {
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+        public String cell;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+        public String home;
     }
 
     /// <summary>
@@ -157,51 +174,163 @@ namespace AllAboutBlittable
             // Let's call my IsBlittable function, showing what is blittable or not.
             // These are from MS, https://docs.microsoft.com/en-us/dotnet/framework/interop/blittable-and-non-blittable-types.
             // All should be true.
-            System.Console.WriteLine(Blittable.IsBlittable<System.Byte>());
-            System.Console.WriteLine(Blittable.IsBlittable < System.SByte>());
-            System.Console.WriteLine(Blittable.IsBlittable < System.Int16>());
-            System.Console.WriteLine(Blittable.IsBlittable < System.UInt16>());
-            System.Console.WriteLine(Blittable.IsBlittable < System.Int32>());
-            System.Console.WriteLine(Blittable.IsBlittable < System.UInt32>());
-            System.Console.WriteLine(Blittable.IsBlittable < System.Int64>());
-            System.Console.WriteLine(Blittable.IsBlittable < System.UInt64>());
-            System.Console.WriteLine(Blittable.IsBlittable < System.IntPtr>());
-            System.Console.WriteLine(Blittable.IsBlittable < System.UIntPtr>());
-            System.Console.WriteLine(Blittable.IsBlittable < System.Single>());
-            System.Console.WriteLine(Blittable.IsBlittable < System.Double>());
+            if (!Buffers.IsBlittable<System.Byte>()) throw new Exception("Expecting true.");
+            if (!Buffers.IsBlittable<System.SByte>()) throw new Exception("Expecting true.");
+            if (!Buffers.IsBlittable<System.Int16>()) throw new Exception("Expecting true.");
+            if (!Buffers.IsBlittable<System.UInt16>()) throw new Exception("Expecting true.");
+            if (!Buffers.IsBlittable<System.Int32>()) throw new Exception("Expecting true.");
+            if (!Buffers.IsBlittable<System.UInt32>()) throw new Exception("Expecting true.");
+            if (!Buffers.IsBlittable<System.Int64>()) throw new Exception("Expecting true.");
+            if (!Buffers.IsBlittable<System.UInt64>()) throw new Exception("Expecting true.");
+            if (!Buffers.IsBlittable<System.IntPtr>()) throw new Exception("Expecting true.");
+            if (!Buffers.IsBlittable<System.UIntPtr>()) throw new Exception("Expecting true.");
+            if (!Buffers.IsBlittable<System.Single>()) throw new Exception("Expecting true.");
+            if (!Buffers.IsBlittable<System.Double>()) throw new Exception("Expecting true.");
 
             // None of the following should be blittable.
 
-            System.Console.WriteLine(Blittable.IsBlittable < System.Array>());
-            System.Console.WriteLine(Blittable.IsBlittable < System.Boolean>());
-            System.Console.WriteLine(Blittable.IsBlittable < System.Char>());
+            if (Buffers.IsBlittable<System.Array>()) throw new Exception("Expecting false.");
+            if (Buffers.IsBlittable<System.Boolean>()) throw new Exception("Expecting false.");
+            if (Buffers.IsBlittable<System.Char>()) throw new Exception("Expecting false.");
             // System.Console.WriteLine(Blittable.IsBlittable < System.Class>());
-            System.Console.WriteLine(Blittable.IsBlittable < System.Object>());
+            if (Buffers.IsBlittable<System.Object>()) throw new Exception("Expecting false.");
             // System.Console.WriteLine(Blittable.IsBlittable < System.Mdarray>());
-            System.Console.WriteLine(Blittable.IsBlittable < System.String>());
+            if (Buffers.IsBlittable<System.String>()) throw new Exception("Expecting false.");
             // System.Console.WriteLine(Blittable.IsBlittable < System.Valuetype>());
             // System.Console.WriteLine(Blittable.IsBlittable < System.Szarray>());
 
-            System.Console.WriteLine(Blittable.IsBlittable<System.Char>() + " expect false");
-            System.Console.WriteLine(Blittable.IsBlittable<char>() + " expect false");
-            System.Console.WriteLine(Blittable.IsBlittable<System.Boolean>() + " expect false");
-            System.Console.WriteLine(Blittable.IsBlittable<bool>() + " expect false");
-            System.Console.WriteLine(Blittable.IsBlittable<System.Int32>());
-            System.Console.WriteLine(Blittable.IsBlittable<int>());
-            System.Console.WriteLine(Blittable.IsBlittable(typeof(decimal)));
-            System.Console.WriteLine(Marshal.SizeOf(typeof(decimal)));
-            // Surprisingly, arrays are blittable.
-            System.Console.WriteLine(Blittable.IsBlittable<int[]>());
-            System.Console.WriteLine(Blittable.IsBlittable<StructWithInt32>());
-            // Structs are blittable, but only if all fields of it are blittable.
-            System.Console.WriteLine(Blittable.IsBlittable<StructWithBool>() + " expect false");
-            System.Console.WriteLine(Blittable.IsBlittable<StructWithChar>());
-            System.Console.WriteLine(Blittable.IsBlittable<ClassWithReference>());
-            System.Console.WriteLine(Blittable.IsBlittable<UInt128>());
-            System.Console.WriteLine(Blittable.IsBlittable<MyStruct>());
-            System.Console.WriteLine(Blittable.IsBlittable<BlittableChar>());
+            // Mixed.
 
-            // Let's now see how GCHandle works, which we will need for CUDA.
+            if (Buffers.IsBlittable<System.Char>()) throw new Exception("Expecting false.");
+            if (Buffers.IsBlittable<char>()) throw new Exception("Expecting false.");
+            if (Buffers.IsBlittable<System.Boolean>()) throw new Exception("Expecting false.");
+            if (Buffers.IsBlittable<bool>()) throw new Exception("Expecting false.");
+            if (!Buffers.IsBlittable<System.Int32>()) throw new Exception("Expecting true.");
+            if (!Buffers.IsBlittable<int>()) throw new Exception("Expecting true.");
+            if (!Buffers.IsBlittable(typeof(decimal))) throw new Exception("Expecting true.");
+            if (Marshal.SizeOf(typeof(decimal)) != 16) throw new Exception("Expecting 16.");
+
+            // Surprisingly, arrays are blittable.
+	        if (!Buffers.IsBlittable<int[]>()) throw new Exception("Expecting true.");
+	        if (Buffers.IsBlittable<char[]>()) throw new Exception("Expecting false.");
+            if (!Buffers.IsBlittable<StructWithInt32>()) throw new Exception("Expecting true.");
+            // Structs are blittable, but only if all fields of it are blittable.
+            if (Buffers.IsBlittable<StructWithBool>()) throw new Exception("Expecting false.");
+            if (Buffers.IsBlittable<StructWithChar>()) throw new Exception("Expecting false.");
+            if (Buffers.IsBlittable<ClassWithReference>()) throw new Exception("Expecting false.");
+            if (!Buffers.IsBlittable<UInt128>()) throw new Exception("Expecting true.");
+			if (!Buffers.IsBlittable<BlittableChar>()) throw new Exception("Expecting true.");
+            if (!Buffers.IsBlittable<ValueTuple<int>>()) throw new Exception("Expecting true.");
+
+            // Custom marshaling screws it all up. We don't use that because we want to generate code that
+            // uses C# data types directly, not those converted to C.
+            // See https://gist.github.com/erichschroeter/df895f2855af0fc89dd5
+
+            if (Buffers.IsBlittable<ValueTuple<contact_info>>()) throw new Exception("Expecting false.");
+            if (Buffers.IsBlittable<MyStruct>()) throw new Exception("Expecting false.");
+
+            /////////////////////////////////////////////////////////////////////
+            /////////////////////////////////////////////////////////////////////
+            //
+            // Convert non-blittable type into blittable type.
+            //
+            /////////////////////////////////////////////////////////////////////
+            /////////////////////////////////////////////////////////////////////
+
+            {
+                Type orig = typeof(int);
+                Type bt = Buffers.CreateImplementationType(orig);
+                if (!Buffers.IsBlittable(bt)) throw new Exception("Expecting true.");
+                string orig_s = Buffers.OutputType(orig);
+                string bt_s = Buffers.OutputType(bt);
+                if (orig_s != bt_s) throw new Exception("Types not identical.");
+            }
+
+            {
+				Type orig = typeof(char);
+				Type bt = Buffers.CreateImplementationType(orig);
+				if (!Buffers.IsBlittable(bt)) throw new Exception("Expecting true.");
+				string orig_s = Buffers.OutputType(orig);
+				string bt_s = Buffers.OutputType(bt);
+				if (orig_s == bt_s) throw new Exception("Types should not be identical.");
+            }
+
+            {
+				Type orig = typeof(int[]);
+				Type bt = Buffers.CreateImplementationType(orig);
+				if (!Buffers.IsBlittable(bt)) throw new Exception("Expecting true.");
+				string orig_s = Buffers.OutputType(orig);
+				string bt_s = Buffers.OutputType(bt);
+                if (orig_s == bt_s) throw new Exception("Types should not be identical.");
+            }
+
+            {
+				Type orig = typeof(StructWithInt32);
+				Type bt = Buffers.CreateImplementationType(orig);
+				if (!Buffers.IsBlittable(bt)) throw new Exception("Expecting true.");
+				string orig_s = Buffers.OutputType(orig);
+				string bt_s = Buffers.OutputType(bt);
+				if (orig_s != bt_s) throw new Exception("Types not identical.");
+            }
+
+            {
+				Type orig = typeof(StructWithBool);
+				Type bt = Buffers.CreateImplementationType(orig);
+				if (!Buffers.IsBlittable(bt)) throw new Exception("Expecting true.");
+				string orig_s = Buffers.OutputType(orig);
+				string bt_s = Buffers.OutputType(bt);
+				if (orig_s == bt_s) throw new Exception("Types should not be identical.");
+            }
+
+            {
+				Type orig = typeof(StructWithChar);
+				Type bt = Buffers.CreateImplementationType(orig);
+				if (!Buffers.IsBlittable(bt)) throw new Exception("Expecting true.");
+				string orig_s = Buffers.OutputType(orig);
+				string bt_s = Buffers.OutputType(bt);
+				if (orig_s == bt_s) throw new Exception("Types should not be identical.");
+            }
+
+            {
+				Type orig = typeof(ClassWithReference);
+				Type bt = Buffers.CreateImplementationType(orig);
+				if (!Buffers.IsBlittable(bt)) throw new Exception("Expecting true.");
+				string orig_s = Buffers.OutputType(orig);
+				string bt_s = Buffers.OutputType(bt);
+				if (orig_s == bt_s) throw new Exception("Types should not be identical.");
+            }
+
+            {
+				Type orig = typeof(List<int>);
+				Type bt = Buffers.CreateImplementationType(orig);
+				if (!Buffers.IsBlittable(bt)) throw new Exception("Expecting true.");
+				string orig_s = Buffers.OutputType(orig);
+                System.Console.WriteLine(orig_s);
+				string bt_s = Buffers.OutputType(bt);
+                System.Console.WriteLine(bt_s);
+				if (orig_s == bt_s) throw new Exception("Types should not be identical.");
+            }
+
+            {
+				Type orig = typeof(List<char>);
+				Type bt = Buffers.CreateImplementationType(orig);
+				if (!Buffers.IsBlittable(bt)) throw new Exception("Expecting true.");
+				string orig_s = Buffers.OutputType(orig);
+				string bt_s = Buffers.OutputType(bt);
+				if (orig_s == bt_s) throw new Exception("Types should not be identical.");
+            }
+
+            /////////////////////////////////////////////////////////////////////
+            /////////////////////////////////////////////////////////////////////
+            //
+            // Prerequisite -- need to be able to pin object references in order
+            // to do a deep copy.
+            //
+            /////////////////////////////////////////////////////////////////////
+            /////////////////////////////////////////////////////////////////////
+
+
+            // Let's now see how GCHandle works, which we will need for copying to blittable type.
             // At it turns out, to pin something, it must be blittable.
             {
                 int f = new int();
@@ -234,179 +363,80 @@ namespace AllAboutBlittable
                 handle.Free();
             }
 
-            // Let's try some cuda driver functions. First, let's initialize things.
-            Cuda.cuInit(0);
-            Cuda.cuCtxCreate_v2(out CUcontext pctx, (uint)Swigged.Cuda.CUctx_flags.CU_CTX_MAP_HOST, 0);
-
-            {
-                // Let's try allocating a block of memory on the host. cuMemHostAlloc allocates bytesize
-                // bytes of host memory that is page-locked and accessible to the device.
-                // Note: cuMemHostAlloc and cuMemAllocHost seem to be almost identical except for the
-                // third parameter to cuMemHostAlloc that is used for the type of memory allocation.
-                var res = Cuda.cuMemHostAlloc(out IntPtr p, 10, (uint)Cuda.CU_MEMHOSTALLOC_DEVICEMAP);
-                if (res == CUresult.CUDA_SUCCESS) System.Console.WriteLine("Worked.");
-                else System.Console.WriteLine("Did not work.");
-            }
-
-            {
-                // Allocate CPU memory, pin it, then register it with GPU.
-                int f = new int();
-                GCHandle handle = GCHandle.Alloc(f, GCHandleType.Pinned);
-                IntPtr pointer = (IntPtr)handle;
-                var size = Marshal.SizeOf(f);
-                var res = Cuda.cuMemHostRegister_v2(pointer, (uint)size, (uint)Cuda.CU_MEMHOSTALLOC_DEVICEMAP);
-                if (res == CUresult.CUDA_SUCCESS) System.Console.WriteLine("Worked.");
-                else System.Console.WriteLine("Did not work.");
-            }
-
-            {
-                // Allocate Unified Memory.
-                var size = 4;
-                var res = Cuda.cuMemAllocManaged(out IntPtr pointer, (uint)size, (uint)Swigged.Cuda.CUmemAttach_flags.CU_MEM_ATTACH_GLOBAL);
-                if (res == CUresult.CUDA_SUCCESS) System.Console.WriteLine("Worked.");
-                else System.Console.WriteLine("Did not work.");
-            }
 
             /////////////////////////////////////////////////////////////////////
             /////////////////////////////////////////////////////////////////////
             //
-            // Convert non-blittable type into blittable type.
+            // Deep copy to implementation and back.
             //
             /////////////////////////////////////////////////////////////////////
             /////////////////////////////////////////////////////////////////////
 
-
-            {
-                System.Console.WriteLine();
-                var bt = Blittable.CreateBlittableType(typeof(int), false, false);
-                Blittable.OutputType(typeof(int));
-                System.Console.WriteLine(Blittable.IsBlittable(bt));
-                Blittable.OutputType(bt);
-            }
-
-            {
-                System.Console.WriteLine();
-                Blittable.OutputType(typeof(char));
-                var bt = Blittable.CreateBlittableType(typeof(char), false, false);
-                System.Console.WriteLine(Blittable.IsBlittable(bt));
-                Blittable.OutputType(bt);
-            }
-
-            {
-                System.Console.WriteLine();
-                Blittable.OutputType(typeof(int[]));
-                var bt = Blittable.CreateBlittableType(typeof(int[]), false, false);
-                System.Console.WriteLine(Blittable.IsBlittable(bt));
-                Blittable.OutputType(bt);
-            }
-
-            {
-                System.Console.WriteLine();
-                Blittable.OutputType(typeof(StructWithInt32));
-                var bt = Blittable.CreateBlittableType(typeof(StructWithInt32), false, false);
-                System.Console.WriteLine(Blittable.IsBlittable(bt));
-                Blittable.OutputType(bt);
-            }
-
-            {
-                System.Console.WriteLine();
-                Blittable.OutputType(typeof(StructWithBool));
-                var bt = Blittable.CreateBlittableType(typeof(StructWithBool), false, false);
-                System.Console.WriteLine(Blittable.IsBlittable(bt));
-                Blittable.OutputType(bt);
-            }
-
-            {
-                System.Console.WriteLine();
-                Blittable.OutputType(typeof(StructWithChar));
-                var bt = Blittable.CreateBlittableType(typeof(StructWithChar), false, false);
-                System.Console.WriteLine(Blittable.IsBlittable(bt));
-                Blittable.OutputType(bt);
-            }
-
-            {
-                // Let's try to convert a simple non-blittable object into a blittable one.
-                var bt = Blittable.CreateBlittableType(typeof(ClassWithReference), false, false);
-                System.Console.WriteLine();
-                System.Console.WriteLine(Blittable.IsBlittable(bt));
-                Blittable.OutputType(typeof(ClassWithReference));
-                Blittable.OutputType(bt);
-            }
-
-            {
-                var list = new List<int>();
-                System.Console.WriteLine();
-                Blittable.OutputType(list.GetType());
-                System.Console.WriteLine(Blittable.IsBlittable(list.GetType()));
-                var bt = Blittable.CreateBlittableType(list.GetType(), false, false);
-                System.Console.WriteLine(Blittable.IsBlittable(bt));
-                Blittable.OutputType(bt);
-            }
-
-            {
-                var list = new List<char>();
-                System.Console.WriteLine(Blittable.IsBlittable(list.GetType()));
-                var bt = Blittable.CreateBlittableType(list.GetType(), false, false);
-                System.Console.WriteLine();
-                System.Console.WriteLine(Blittable.IsBlittable(bt));
-                Blittable.OutputType(list.GetType());
-                Blittable.OutputType(bt);
-            }
-
-            /////////////////////////////////////////////////////////////////////
-            /////////////////////////////////////////////////////////////////////
-            //
-            // Copy from non-blittable or blittable managed object to unmanaged.
-            //
-            /////////////////////////////////////////////////////////////////////
-            /////////////////////////////////////////////////////////////////////
 
 
             {
                 // Let's try to convert a simple non-blittable type into a blittable type.
                 int i = 1;
+                Buffers.DeepCopyToImplementation(i, out object j);
+                if ((int)j != i) throw new Exception("Copy failed.");
+            }
+
+            {
+                int f = 1;
                 System.Console.WriteLine();
-                Blittable.CopyToManagedBlittableType(i, out object j);
+                Buffers.DeepCopyToImplementation(f, out object j);
+                Buffers.DeepCopyFromImplementation(j, out object too, typeof(int));
+                var g = (int)too;
+                if (g != f) throw new Exception("Copy failed.");
             }
 
             {
                 // Let's try to convert a simple non-blittable type into a blittable type.
                 StructWithInt32 f = new StructWithInt32() { a = 1, b = 2 };
                 System.Console.WriteLine();
-                Blittable.CopyToManagedBlittableType(f, out object j);
+                Buffers.DeepCopyToImplementation(f, out object j);
+                Type t = j.GetType();
+                Type ft = f.GetType();
+                //StructWithInt32 v = (StructWithInt32)j; cannot be done because the types are not the same.
+                Buffers.DeepCopyFromImplementation(j, out object too, ft);
+                StructWithInt32 v = (StructWithInt32)too;
+                if (!f.Equals(v)) throw new Exception("Copy failed.");
+            }
+
+            {
+                // Let's try to convert a simple non-blittable type into a blittable type.
+                StructStruct f = new StructStruct() { a = 1, b = new StructWithInt32(){a=3, b=4} };
+                Type orig = f.GetType();
+                Type bt = Buffers.CreateImplementationType(orig);
+                if (!Buffers.IsBlittable(bt)) throw new Exception("Expecting true.");
+                string orig_s = Buffers.OutputType(orig);
+                System.Console.WriteLine(orig_s);
+                string bt_s = Buffers.OutputType(bt);
+                System.Console.WriteLine(bt_s);
+                System.Console.WriteLine(Marshal.SizeOf(f));
+
+                GCHandle handle = GCHandle.Alloc(f, GCHandleType.Pinned);
+                IntPtr pointer = (IntPtr)handle;
+                handle.Free();
+
+                System.Console.WriteLine();
+                Buffers.DeepCopyToImplementation(f, out object j);
             }
 
             {
                 // Let's try to convert a simple non-blittable type into a blittable type.
                 var f = new int[] { 1, 2, 3 };
-                System.Console.WriteLine();
-                Blittable.CopyToManagedBlittableType(f, out object j);
-            }
-
-
-            /////////////////////////////////////////////////////////////////////
-            /////////////////////////////////////////////////////////////////////
-            //
-            // Deep copy from unmanaged to non-blittable managed.
-            //
-            /////////////////////////////////////////////////////////////////////
-            /////////////////////////////////////////////////////////////////////
-
-
-            {
-                int f = 1;
-                System.Console.WriteLine();
-                Blittable.CopyToManagedBlittableType(f, out object j);
-                Blittable.CopyFromManagedBlittableType(j, out object too, typeof(int));
-                var g = (int) too;
-                if (g != f) throw new Exception("Copy failed.");
+                Buffers.DeepCopyToImplementation(f, out object j);
+                Buffers.DeepCopyFromImplementation(j, out object too, f.GetType());
+                int[] v = (int[])too;
+                if (!f.SequenceEqual(v)) throw new Exception("Copy failed.");
             }
 
             {
                 StructWithInt32 f = new StructWithInt32() { a = 1, b = 2 };
                 System.Console.WriteLine();
-                Blittable.CopyToManagedBlittableType(f, out object j);
-                Blittable.CopyFromManagedBlittableType(j, out object too, typeof(StructWithInt32));
+                Buffers.DeepCopyToImplementation(f, out object j);
+                Buffers.DeepCopyFromImplementation(j, out object too, typeof(StructWithInt32));
                 var g = (StructWithInt32)too;
                 if (g.a != f.a) throw new Exception("Copy failed.");
                 if (g.b != f.b) throw new Exception("Copy failed.");
@@ -415,8 +445,8 @@ namespace AllAboutBlittable
             {
                 StructWithBool f = new StructWithBool() { a = true, b = 2 };
                 System.Console.WriteLine();
-                Blittable.CopyToManagedBlittableType(f, out object j);
-                Blittable.CopyFromManagedBlittableType(j, out object too, typeof(StructWithBool));
+                Buffers.DeepCopyToImplementation(f, out object j);
+                Buffers.DeepCopyFromImplementation(j, out object too, typeof(StructWithBool));
                 var g = (StructWithBool)too;
                 if (g.a != f.a) throw new Exception("Copy failed.");
                 if (g.b != f.b) throw new Exception("Copy failed.");
@@ -425,21 +455,11 @@ namespace AllAboutBlittable
             {
                 StructWithBool f = new StructWithBool() { a = false, b = 2 };
                 System.Console.WriteLine();
-                Blittable.CopyToManagedBlittableType(f, out object j);
-                Blittable.CopyFromManagedBlittableType(j, out object too, typeof(StructWithBool));
+                Buffers.DeepCopyToImplementation(f, out object j);
+                Buffers.DeepCopyFromImplementation(j, out object too, typeof(StructWithBool));
                 var g = (StructWithBool)too;
                 if (g.a != f.a) throw new Exception("Copy failed.");
                 if (g.b != f.b) throw new Exception("Copy failed.");
-            }
-
-            {
-                var f = new int[] { 1, 2, 3 };
-                System.Console.WriteLine();
-                Blittable.CopyToManagedBlittableType(f, out object j);
-                Blittable.CopyFromManagedBlittableType(j, out object too, typeof(int[]));
-                var g = (int[]) too;
-                for (int i = 0; i < f.Length; ++i)
-                    if (g[i] != f[i]) throw new Exception("Copy failed.");
             }
 
             {
@@ -448,13 +468,13 @@ namespace AllAboutBlittable
                 var n2 = new TreeNode() { Left = null, Right = null, Id = 2 };
                 var n3 = new TreeNode() { Left = n1, Right = n2, Id = 3 };
                 var n4 = new TreeNode() { Left = n3, Right = null, Id = 4 };
-                var bt = Blittable.CreateBlittableType(typeof(TreeNode), false, false);
+                var bt = Buffers.CreateImplementationType(typeof(TreeNode));
                 System.Console.WriteLine();
-                System.Console.WriteLine(Blittable.IsBlittable(bt));//// 
-                Blittable.OutputType(typeof(TreeNode));
-                Blittable.OutputType(bt);
-                Blittable.CopyToManagedBlittableType(n4, out object j);
-                Blittable.CopyFromManagedBlittableType(j, out object too, typeof(TreeNode));
+                System.Console.WriteLine(Buffers.IsBlittable(bt));//// 
+                Buffers.OutputType(typeof(TreeNode));
+                Buffers.OutputType(bt);
+                Buffers.DeepCopyToImplementation(n4, out object j);
+                Buffers.DeepCopyFromImplementation(j, out object too, typeof(TreeNode));
                 var o4 = (TreeNode) too;
                 if (o4.Id != n4.Id) throw new Exception("Copy failed.");
                 if (o4.Left.Id != n3.Id) throw new Exception("Copy failed.");
