@@ -5,6 +5,7 @@ using System.Reflection.Emit;
 using System.Runtime.InteropServices;
 using System.Runtime.Serialization;
 using System.Text;
+using Swigged.Cuda;
 
 namespace GpuCore
 {
@@ -21,6 +22,18 @@ namespace GpuCore
     /// </summary>
     public class Buffers
     {
+        private CUcontext _pctx;
+        Asm _asm;
+        static Dictionary<string, string> _type_name_map = new Dictionary<string, string>();
+        static Dictionary<object, IntPtr> _allocated_objects = new Dictionary<object, IntPtr>();
+
+        public Buffers()
+        {
+            _asm = new Asm();
+            Cuda.cuInit(0);
+            Cuda.cuCtxCreate_v2(out _pctx, (uint)Swigged.Cuda.CUctx_flags.CU_CTX_MAP_HOST, 0);
+        }
+
         /// <summary>
         /// This code to check if a type is blittable.
         /// See http://aakinshin.net/blog/post/blittable/
@@ -57,6 +70,12 @@ namespace GpuCore
             public static readonly bool Value = IsBlittable(typeof(T));
         }
 
+        public static bool IsStruct(System.Type t)
+        {
+            return t.IsValueType && !t.IsPrimitive && !t.IsEnum;
+        }
+
+
         /// <summary>
         /// Asm class used by CreateImplementationType in order to create a blittable type
         /// corresponding to a host type.
@@ -78,16 +97,7 @@ namespace GpuCore
             }
         }
 
-        static Asm _asm = new Asm();
-
-        public static bool IsStruct(System.Type t)
-        {
-            return t.IsValueType && !t.IsPrimitive && !t.IsEnum;
-        }
-
-        static Dictionary<string, string> _type_name_map = new Dictionary<string, string>();
-
-        public static Type CreateImplementationType(Type hostType, bool declare_parent_chain = true, bool declare_flatten_structure = false)
+        public Type CreateImplementationType(Type hostType, bool declare_parent_chain = true, bool declare_flatten_structure = false)
         {
             try
             {
@@ -303,7 +313,6 @@ namespace GpuCore
             }
         }
 
-        static Dictionary<object, IntPtr> _allocated_objects = new Dictionary<object, IntPtr>();
 
         /// <summary>
         /// This method copies from a managed type into a blittable managed type.
@@ -311,7 +320,7 @@ namespace GpuCore
         /// </summary>
         /// <param name="from"></param>
         /// <param name="to"></param>
-        public static void DeepCopyToImplementation(object from, out object to)
+        public void DeepCopyToImplementation(object from, out object to)
         {
             try
             {
@@ -429,7 +438,8 @@ namespace GpuCore
                     var a = (Array)from;
                     unsafe
                     {
-                        var intptr = New(blittable_type, a.Length);
+                        var blittable_element_type = CreateImplementationType(from.GetType().GetElementType());
+                        var intptr = New(blittable_element_type, a.Length);
                         var len = a.Length;
 
                         System.Reflection.FieldInfo[] tfi = blittable_type.GetFields();
@@ -512,7 +522,7 @@ namespace GpuCore
             }
         }
 
-        public static void DeepCopyFromImplementation(object from, out object to, Type target_type)
+        public void DeepCopyFromImplementation(object from, out object to, Type target_type)
         {
             Type f_type = from.GetType();
             Type t_type = target_type;
@@ -702,7 +712,7 @@ namespace GpuCore
             }
         }
 
-        public static IntPtr CopyToGPUBuffer(Array from, IntPtr cpp_array, Type blittable_element_type)
+        public IntPtr CopyToGPUBuffer(Array from, IntPtr cpp_array, Type blittable_element_type)
         {
             IntPtr byte_ptr = cpp_array;
             int size_element = Marshal.SizeOf(blittable_element_type);
@@ -716,7 +726,7 @@ namespace GpuCore
             return cpp_array;
         }
 
-        public static IntPtr CopyFromGPUBuffer(IntPtr a, Array to, Type blittable_element_type)
+        public IntPtr CopyFromGPUBuffer(IntPtr a, Array to, Type blittable_element_type)
         {
             int size_element = Marshal.SizeOf(blittable_element_type);
             IntPtr mem = a;
@@ -762,43 +772,82 @@ namespace GpuCore
         /// Allocated a GPU managed buffer.
         /// Code based on https://www.codeproject.com/Articles/32125/Unmanaged-Arrays-in-C-No-Problem
         /// </summary>
-        public static IntPtr New(Type t, int elementCount)
+        public IntPtr New(Type t, int elementCount)
         {
             if (!IsBlittable(t)) throw new Exception("Fucked!");
-            return Marshal.AllocHGlobal(Marshal.SizeOf(t) * elementCount);
+
+            if (false)
+            {
+                // Let's try allocating a block of memory on the host. cuMemHostAlloc allocates bytesize
+                // bytes of host memory that is page-locked and accessible to the device.
+                // Note: cuMemHostAlloc and cuMemAllocHost seem to be almost identical except for the
+                // third parameter to cuMemHostAlloc that is used for the type of memory allocation.
+                var res = Cuda.cuMemHostAlloc(out IntPtr p, 10, (uint)Cuda.CU_MEMHOSTALLOC_DEVICEMAP);
+                if (res == CUresult.CUDA_SUCCESS) System.Console.WriteLine("Worked.");
+                else System.Console.WriteLine("Did not work.");
+            }
+
+            if (false)
+            {
+                // Allocate CPU memory, pin it, then register it with GPU.
+                int f = new int();
+                GCHandle handle = GCHandle.Alloc(f, GCHandleType.Pinned);
+                IntPtr pointer = (IntPtr)handle;
+                var size = Marshal.SizeOf(f);
+                var res = Cuda.cuMemHostRegister_v2(pointer, (uint)size, (uint)Cuda.CU_MEMHOSTALLOC_DEVICEMAP);
+                if (res == CUresult.CUDA_SUCCESS) System.Console.WriteLine("Worked.");
+                else System.Console.WriteLine("Did not work.");
+            }
+
+            {
+                // Allocate Unified Memory.
+                var size = Marshal.SizeOf(t) * elementCount;
+                var res = Cuda.cuMemAllocManaged(out IntPtr pointer, (uint)size, (uint)Swigged.Cuda.CUmemAttach_flags.CU_MEM_ATTACH_GLOBAL);
+                if (res != CUresult.CUDA_SUCCESS) throw new Exception("cuMemAllocManged failed.");
+                return pointer;
+            }
+
+            if (false)
+            {
+                return Marshal.AllocHGlobal(Marshal.SizeOf(t) * elementCount);
+            }
         }
 
-        public static unsafe void* NewAndInit(Type t, int elementCount)
+        public unsafe IntPtr NewAndInit(Type t, int elementCount)
         {
-            if (!IsBlittable(t)) throw new Exception("Fucked!");
-            int newSizeInBytes = Marshal.SizeOf(t) * elementCount;
-            byte* newArrayPointer = (byte*)Marshal.AllocHGlobal(newSizeInBytes).ToPointer();
-            for (int i = 0; i < newSizeInBytes; i++)
-                *(newArrayPointer + i) = 0;
-            return (void*)newArrayPointer;
+            unsafe
+            {
+                if (!IsBlittable(t)) throw new Exception("Fucked!");
+                int newSizeInBytes = Marshal.SizeOf(t) * elementCount;
+                var result = Marshal.AllocHGlobal(newSizeInBytes);
+                byte* newArrayPointer = (byte*) result.ToPointer();
+                for (int i = 0; i < newSizeInBytes; i++)
+                    *(newArrayPointer + i) = 0;
+                return result;
+            }
         }
 
-        public static unsafe void Free(void* pointerToUnmanagedMemory)
+        public void Free(IntPtr pointerToUnmanagedMemory)
         {
-            Marshal.FreeHGlobal(new IntPtr(pointerToUnmanagedMemory));
+            Marshal.FreeHGlobal(pointerToUnmanagedMemory);
         }
 
-        public static unsafe void* Resize<T>(void* oldPointer, int newElementCount)
+        public unsafe void* Resize<T>(void* oldPointer, int newElementCount)
             where T : struct
         {
             return (Marshal.ReAllocHGlobal(new IntPtr(oldPointer),
                 new IntPtr(Marshal.SizeOf(typeof(T)) * newElementCount))).ToPointer();
         }
 
-        public static unsafe void Cp(IntPtr destPtr, IntPtr srcPtr, int size)
+        public void Cp(IntPtr destPtr, IntPtr srcPtr, int size)
         {
             unsafe
             {
                 // srcPtr and destPtr are IntPtr's pointing to valid memory locations
-                // size is the number of long (normally 4 bytes) to copy
+                // size is the number of bytes to copy
                 byte* src = (byte*)srcPtr;
                 byte* dest = (byte*)destPtr;
-                for (int i = 0; i < size / sizeof(byte); i++)
+                for (int i = 0; i < size; i++)
                 {
                     dest[i] = src[i];
                 }

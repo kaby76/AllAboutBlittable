@@ -97,6 +97,7 @@ namespace GpuCore
     {
         static void Main(string[] args)
         {
+            Buffers buffer = new Buffers();
 
             // Let's start with some basics:
             //
@@ -229,6 +230,25 @@ namespace GpuCore
             if (Buffers.IsBlittable<ValueTuple<contact_info>>()) throw new Exception("Expecting false.");
             if (Buffers.IsBlittable<MyStruct>()) throw new Exception("Expecting false.");
 
+            {
+                StructWithInt32 f = new StructWithInt32() { a = 1, b = 2 };
+                IntPtr ptr = buffer.New(f.GetType(), 1);
+                Marshal.StructureToPtr(f, ptr, false);
+            }
+
+            if (false)
+            {
+                // Note, this code cannot work--throws exception indicating there is no layout information.
+                // That is because the struct contains references, not blittable.
+                var n1 = new TreeNode() { Left = null, Right = null, Id = 1 };
+                var n2 = new TreeNode() { Left = null, Right = null, Id = 2 };
+                var n3 = new TreeNode() { Left = n1, Right = n2, Id = 3 };
+                var n4 = new TreeNode() { Left = n3, Right = null, Id = 4 };
+                IntPtr ptr = Marshal.AllocHGlobal(1024);
+                Marshal.StructureToPtr(n4, ptr, false);
+            }
+
+
             /////////////////////////////////////////////////////////////////////
             /////////////////////////////////////////////////////////////////////
             //
@@ -239,7 +259,7 @@ namespace GpuCore
 
             {
                 Type orig = typeof(int);
-                Type bt = Buffers.CreateImplementationType(orig);
+                Type bt = buffer.CreateImplementationType(orig);
                 if (!Buffers.IsBlittable(bt)) throw new Exception("Expecting true.");
                 string orig_s = Buffers.OutputType(orig);
                 string bt_s = Buffers.OutputType(bt);
@@ -248,7 +268,7 @@ namespace GpuCore
 
             {
 				Type orig = typeof(char);
-				Type bt = Buffers.CreateImplementationType(orig);
+				Type bt = buffer.CreateImplementationType(orig);
 				if (!Buffers.IsBlittable(bt)) throw new Exception("Expecting true.");
 				string orig_s = Buffers.OutputType(orig);
 				string bt_s = Buffers.OutputType(bt);
@@ -257,7 +277,7 @@ namespace GpuCore
 
             {
 				Type orig = typeof(int[]);
-				Type bt = Buffers.CreateImplementationType(orig);
+				Type bt = buffer.CreateImplementationType(orig);
 				if (!Buffers.IsBlittable(bt)) throw new Exception("Expecting true.");
 				string orig_s = Buffers.OutputType(orig);
 				string bt_s = Buffers.OutputType(bt);
@@ -266,7 +286,7 @@ namespace GpuCore
 
             {
 				Type orig = typeof(StructWithInt32);
-				Type bt = Buffers.CreateImplementationType(orig);
+				Type bt = buffer.CreateImplementationType(orig);
 				if (!Buffers.IsBlittable(bt)) throw new Exception("Expecting true.");
 				string orig_s = Buffers.OutputType(orig);
 				string bt_s = Buffers.OutputType(bt);
@@ -275,7 +295,7 @@ namespace GpuCore
 
             {
 				Type orig = typeof(StructWithBool);
-				Type bt = Buffers.CreateImplementationType(orig);
+				Type bt = buffer.CreateImplementationType(orig);
 				if (!Buffers.IsBlittable(bt)) throw new Exception("Expecting true.");
 				string orig_s = Buffers.OutputType(orig);
 				string bt_s = Buffers.OutputType(bt);
@@ -284,7 +304,7 @@ namespace GpuCore
 
             {
 				Type orig = typeof(StructWithChar);
-				Type bt = Buffers.CreateImplementationType(orig);
+				Type bt = buffer.CreateImplementationType(orig);
 				if (!Buffers.IsBlittable(bt)) throw new Exception("Expecting true.");
 				string orig_s = Buffers.OutputType(orig);
 				string bt_s = Buffers.OutputType(bt);
@@ -293,7 +313,7 @@ namespace GpuCore
 
             {
 				Type orig = typeof(ClassWithReference);
-				Type bt = Buffers.CreateImplementationType(orig);
+				Type bt = buffer.CreateImplementationType(orig);
 				if (!Buffers.IsBlittable(bt)) throw new Exception("Expecting true.");
 				string orig_s = Buffers.OutputType(orig);
 				string bt_s = Buffers.OutputType(bt);
@@ -302,7 +322,7 @@ namespace GpuCore
 
             {
 				Type orig = typeof(List<int>);
-				Type bt = Buffers.CreateImplementationType(orig);
+				Type bt = buffer.CreateImplementationType(orig);
 				if (!Buffers.IsBlittable(bt)) throw new Exception("Expecting true.");
 				string orig_s = Buffers.OutputType(orig);
                 System.Console.WriteLine(orig_s);
@@ -313,7 +333,7 @@ namespace GpuCore
 
             {
 				Type orig = typeof(List<char>);
-				Type bt = Buffers.CreateImplementationType(orig);
+				Type bt = buffer.CreateImplementationType(orig);
 				if (!Buffers.IsBlittable(bt)) throw new Exception("Expecting true.");
 				string orig_s = Buffers.OutputType(orig);
 				string bt_s = Buffers.OutputType(bt);
@@ -377,15 +397,15 @@ namespace GpuCore
             {
                 // Let's try to convert a simple non-blittable type into a blittable type.
                 int i = 1;
-                Buffers.DeepCopyToImplementation(i, out object j);
+                buffer.DeepCopyToImplementation(i, out object j);
                 if ((int)j != i) throw new Exception("Copy failed.");
             }
 
             {
                 int f = 1;
                 System.Console.WriteLine();
-                Buffers.DeepCopyToImplementation(f, out object j);
-                Buffers.DeepCopyFromImplementation(j, out object too, typeof(int));
+                buffer.DeepCopyToImplementation(f, out object j);
+                buffer.DeepCopyFromImplementation(j, out object too, typeof(int));
                 var g = (int)too;
                 if (g != f) throw new Exception("Copy failed.");
             }
@@ -394,11 +414,11 @@ namespace GpuCore
                 // Let's try to convert a simple non-blittable type into a blittable type.
                 StructWithInt32 f = new StructWithInt32() { a = 1, b = 2 };
                 System.Console.WriteLine();
-                Buffers.DeepCopyToImplementation(f, out object j);
+                buffer.DeepCopyToImplementation(f, out object j);
                 Type t = j.GetType();
                 Type ft = f.GetType();
                 //StructWithInt32 v = (StructWithInt32)j; cannot be done because the types are not the same.
-                Buffers.DeepCopyFromImplementation(j, out object too, ft);
+                buffer.DeepCopyFromImplementation(j, out object too, ft);
                 StructWithInt32 v = (StructWithInt32)too;
                 if (!f.Equals(v)) throw new Exception("Copy failed.");
             }
@@ -407,7 +427,7 @@ namespace GpuCore
                 // Let's try to convert a simple non-blittable type into a blittable type.
                 StructStruct f = new StructStruct() { a = 1, b = new StructWithInt32(){a=3, b=4} };
                 Type orig = f.GetType();
-                Type bt = Buffers.CreateImplementationType(orig);
+                Type bt = buffer.CreateImplementationType(orig);
                 if (!Buffers.IsBlittable(bt)) throw new Exception("Expecting true.");
                 string orig_s = Buffers.OutputType(orig);
                 System.Console.WriteLine(orig_s);
@@ -420,14 +440,14 @@ namespace GpuCore
                 handle.Free();
 
                 System.Console.WriteLine();
-                Buffers.DeepCopyToImplementation(f, out object j);
+                buffer.DeepCopyToImplementation(f, out object j);
             }
 
             {
                 // Let's try to convert a simple non-blittable type into a blittable type.
                 var f = new int[] { 1, 2, 3 };
-                Buffers.DeepCopyToImplementation(f, out object j);
-                Buffers.DeepCopyFromImplementation(j, out object too, f.GetType());
+                buffer.DeepCopyToImplementation(f, out object j);
+                buffer.DeepCopyFromImplementation(j, out object too, f.GetType());
                 int[] v = (int[])too;
                 if (!f.SequenceEqual(v)) throw new Exception("Copy failed.");
             }
@@ -435,8 +455,8 @@ namespace GpuCore
             {
                 StructWithInt32 f = new StructWithInt32() { a = 1, b = 2 };
                 System.Console.WriteLine();
-                Buffers.DeepCopyToImplementation(f, out object j);
-                Buffers.DeepCopyFromImplementation(j, out object too, typeof(StructWithInt32));
+                buffer.DeepCopyToImplementation(f, out object j);
+                buffer.DeepCopyFromImplementation(j, out object too, typeof(StructWithInt32));
                 var g = (StructWithInt32)too;
                 if (g.a != f.a) throw new Exception("Copy failed.");
                 if (g.b != f.b) throw new Exception("Copy failed.");
@@ -445,8 +465,8 @@ namespace GpuCore
             {
                 StructWithBool f = new StructWithBool() { a = true, b = 2 };
                 System.Console.WriteLine();
-                Buffers.DeepCopyToImplementation(f, out object j);
-                Buffers.DeepCopyFromImplementation(j, out object too, typeof(StructWithBool));
+                buffer.DeepCopyToImplementation(f, out object j);
+                buffer.DeepCopyFromImplementation(j, out object too, typeof(StructWithBool));
                 var g = (StructWithBool)too;
                 if (g.a != f.a) throw new Exception("Copy failed.");
                 if (g.b != f.b) throw new Exception("Copy failed.");
@@ -455,8 +475,8 @@ namespace GpuCore
             {
                 StructWithBool f = new StructWithBool() { a = false, b = 2 };
                 System.Console.WriteLine();
-                Buffers.DeepCopyToImplementation(f, out object j);
-                Buffers.DeepCopyFromImplementation(j, out object too, typeof(StructWithBool));
+                buffer.DeepCopyToImplementation(f, out object j);
+                buffer.DeepCopyFromImplementation(j, out object too, typeof(StructWithBool));
                 var g = (StructWithBool)too;
                 if (g.a != f.a) throw new Exception("Copy failed.");
                 if (g.b != f.b) throw new Exception("Copy failed.");
@@ -468,13 +488,13 @@ namespace GpuCore
                 var n2 = new TreeNode() { Left = null, Right = null, Id = 2 };
                 var n3 = new TreeNode() { Left = n1, Right = n2, Id = 3 };
                 var n4 = new TreeNode() { Left = n3, Right = null, Id = 4 };
-                var bt = Buffers.CreateImplementationType(typeof(TreeNode));
+                var bt = buffer.CreateImplementationType(typeof(TreeNode));
                 System.Console.WriteLine();
                 System.Console.WriteLine(Buffers.IsBlittable(bt));//// 
                 Buffers.OutputType(typeof(TreeNode));
                 Buffers.OutputType(bt);
-                Buffers.DeepCopyToImplementation(n4, out object j);
-                Buffers.DeepCopyFromImplementation(j, out object too, typeof(TreeNode));
+                buffer.DeepCopyToImplementation(n4, out object j);
+                buffer.DeepCopyFromImplementation(j, out object too, typeof(TreeNode));
                 var o4 = (TreeNode) too;
                 if (o4.Id != n4.Id) throw new Exception("Copy failed.");
                 if (o4.Left.Id != n3.Id) throw new Exception("Copy failed.");
