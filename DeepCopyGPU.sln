@@ -3,7 +3,7 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio 15
 VisualStudioVersion = 15.0.26430.14
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AllAboutBlittable", "AllAboutBlittable\AllAboutBlittable.csproj", "{B7355999-311D-40D1-B7B7-C0A181DA2D0B}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DeepCopyGPU", "DeepCopyGPU\DeepCopyGPU.csproj", "{B7355999-311D-40D1-B7B7-C0A181DA2D0B}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

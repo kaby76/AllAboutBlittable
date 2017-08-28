@@ -6,8 +6,8 @@
     <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
     <ProjectGuid>{B7355999-311D-40D1-B7B7-C0A181DA2D0B}</ProjectGuid>
     <OutputType>Exe</OutputType>
-    <RootNamespace>AllAboutBlittable</RootNamespace>
-    <AssemblyName>AllAboutBlittable</AssemblyName>
+    <RootNamespace>DeepCopyGPU</RootNamespace>
+    <AssemblyName>DeepCopyGPU</AssemblyName>
     <TargetFrameworkVersion>v4.7</TargetFrameworkVersion>
     <FileAlignment>512</FileAlignment>
     <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
