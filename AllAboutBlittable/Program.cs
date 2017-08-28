@@ -99,6 +99,19 @@ namespace GpuCore
         {
             Buffers buffer = new Buffers();
 
+            if (false)
+            {
+                // Note, this code cannot work--throws exception indicating there is no layout information.
+                // That is because the struct contains references, not blittable.
+                var n1 = new TreeNode() { Left = null, Right = null, Id = 1 };
+                var n2 = new TreeNode() { Left = null, Right = null, Id = 2 };
+                var n3 = new TreeNode() { Left = n1, Right = n2, Id = 3 };
+                var n4 = new TreeNode() { Left = n3, Right = null, Id = 4 };
+                IntPtr ptr = Marshal.AllocHGlobal(1024);
+                Marshal.StructureToPtr(n4, ptr, false);
+            }
+
+
             // Let's start with some basics:
             //
             // (1) What is a blittable type?
@@ -229,24 +242,6 @@ namespace GpuCore
 
             if (Buffers.IsBlittable<ValueTuple<contact_info>>()) throw new Exception("Expecting false.");
             if (Buffers.IsBlittable<MyStruct>()) throw new Exception("Expecting false.");
-
-            {
-                StructWithInt32 f = new StructWithInt32() { a = 1, b = 2 };
-                IntPtr ptr = buffer.New(f.GetType(), 1);
-                Marshal.StructureToPtr(f, ptr, false);
-            }
-
-            if (false)
-            {
-                // Note, this code cannot work--throws exception indicating there is no layout information.
-                // That is because the struct contains references, not blittable.
-                var n1 = new TreeNode() { Left = null, Right = null, Id = 1 };
-                var n2 = new TreeNode() { Left = null, Right = null, Id = 2 };
-                var n3 = new TreeNode() { Left = n1, Right = n2, Id = 3 };
-                var n4 = new TreeNode() { Left = n3, Right = null, Id = 4 };
-                IntPtr ptr = Marshal.AllocHGlobal(1024);
-                Marshal.StructureToPtr(n4, ptr, false);
-            }
 
 
             /////////////////////////////////////////////////////////////////////
@@ -392,92 +387,95 @@ namespace GpuCore
             /////////////////////////////////////////////////////////////////////
             /////////////////////////////////////////////////////////////////////
 
-
-
-            {
-                // Let's try to convert a simple non-blittable type into a blittable type.
-                int i = 1;
-                buffer.DeepCopyToImplementation(i, out object j);
-                if ((int)j != i) throw new Exception("Copy failed.");
-            }
-
-            {
+            unsafe {
                 int f = 1;
-                System.Console.WriteLine();
-                buffer.DeepCopyToImplementation(f, out object j);
-                buffer.DeepCopyFromImplementation(j, out object too, typeof(int));
-                var g = (int)too;
-                if (g != f) throw new Exception("Copy failed.");
+                int g = 0;
+
+                // NB: GCHandle.Alloc of a value type basically gives you jack shit. You aren't going
+                // to modify the variable, but a copy of the value. So, this is not the way to do this.
+                // https://stackoverflow.com/questions/4865104/convert-any-object-to-a-byte
+                //var handle_f = GCHandle.Alloc(f, GCHandleType.Pinned);
+                //var handle_g = GCHandle.Alloc(g, GCHandleType.Pinned);
+                //var intptr_f = handle_f.AddrOfPinnedObject();
+                //var intptr_g = handle_g.AddrOfPinnedObject();
+                //var gt = handle_g.Target;
+                //var ft = handle_f.Target;
+                //IntPtr pg = GCHandle.ToIntPtr(handle_g);
+
+                // The only way to get this to work is via pointers to the variable contents.
+                buffer.DeepCopyToImplementation(f, &g);
+                if (!f.Equals(g)) throw new Exception("Copy failed.");
             }
 
+            unsafe
             {
-                // Let's try to convert a simple non-blittable type into a blittable type.
-                StructWithInt32 f = new StructWithInt32() { a = 1, b = 2 };
-                System.Console.WriteLine();
-                buffer.DeepCopyToImplementation(f, out object j);
-                Type t = j.GetType();
-                Type ft = f.GetType();
-                //StructWithInt32 v = (StructWithInt32)j; cannot be done because the types are not the same.
-                buffer.DeepCopyFromImplementation(j, out object too, ft);
-                StructWithInt32 v = (StructWithInt32)too;
-                if (!f.Equals(v)) throw new Exception("Copy failed.");
+                StructWithInt32 f = new StructWithInt32() {a=1,b=2};
+                StructWithInt32 g = new StructWithInt32();
+                buffer.DeepCopyToImplementation(f, &g);
+                if (!f.Equals(g)) throw new Exception("Copy failed.");
             }
 
+            //{
+            //    // Let's try to convert a simple non-blittable type into a blittable type.
+            //    StructStruct f = new StructStruct() { a = 1, b = new StructWithInt32(){a=3, b=4} };
+            //    Type orig = f.GetType();
+            //    Type bt = buffer.CreateImplementationType(orig);
+            //    if (!Buffers.IsBlittable(bt)) throw new Exception("Expecting true.");
+            //    string orig_s = Buffers.OutputType(orig);
+            //    System.Console.WriteLine(orig_s);
+            //    string bt_s = Buffers.OutputType(bt);
+            //    System.Console.WriteLine(bt_s);
+            //    System.Console.WriteLine(Marshal.SizeOf(f));
+
+            //    GCHandle handle = GCHandle.Alloc(f, GCHandleType.Pinned);
+            //    IntPtr pointer = (IntPtr)handle;
+            //    handle.Free();
+
+            //    System.Console.WriteLine();
+            //    buffer.DeepCopyToImplementation(f, out object j);
+            //}
+
             {
-                // Let's try to convert a simple non-blittable type into a blittable type.
-                StructStruct f = new StructStruct() { a = 1, b = new StructWithInt32(){a=3, b=4} };
-                Type orig = f.GetType();
-                Type bt = buffer.CreateImplementationType(orig);
-                if (!Buffers.IsBlittable(bt)) throw new Exception("Expecting true.");
-                string orig_s = Buffers.OutputType(orig);
-                System.Console.WriteLine(orig_s);
-                string bt_s = Buffers.OutputType(bt);
-                System.Console.WriteLine(bt_s);
-                System.Console.WriteLine(Marshal.SizeOf(f));
-
-                GCHandle handle = GCHandle.Alloc(f, GCHandleType.Pinned);
-                IntPtr pointer = (IntPtr)handle;
-                handle.Free();
-
-                System.Console.WriteLine();
-                buffer.DeepCopyToImplementation(f, out object j);
-            }
-
-            {
-                // Let's try to convert a simple non-blittable type into a blittable type.
                 var f = new int[] { 1, 2, 3 };
-                buffer.DeepCopyToImplementation(f, out object j);
-                buffer.DeepCopyFromImplementation(j, out object too, f.GetType());
-                int[] v = (int[])too;
-                if (!f.SequenceEqual(v)) throw new Exception("Copy failed.");
+                var size = Marshal.SizeOf(typeof(IntPtr)) // Pointer
+                           + Marshal.SizeOf(typeof(Int32)) // length
+                           + Marshal.SizeOf(typeof(Int32)) * f.Length; // Array values
+                IntPtr gp = buffer.New(size);
+                buffer.DeepCopyToImplementation(f, gp);
+                buffer.DeepCopyFromImplementation(gp, out object go, f.GetType());
+                var g = (int[]) go;
+                if (!f.SequenceEqual(g)) throw new Exception("Copy failed.");
             }
 
             {
                 StructWithInt32 f = new StructWithInt32() { a = 1, b = 2 };
-                System.Console.WriteLine();
-                buffer.DeepCopyToImplementation(f, out object j);
-                buffer.DeepCopyFromImplementation(j, out object too, typeof(StructWithInt32));
-                var g = (StructWithInt32)too;
+                var size = Marshal.SizeOf(buffer.CreateImplementationType(typeof(StructWithInt32)));
+                IntPtr gp = buffer.New(size);
+                buffer.DeepCopyToImplementation(f, gp);
+                buffer.DeepCopyFromImplementation(gp, out object go, f.GetType());
+                var g = (StructWithInt32)go;
                 if (g.a != f.a) throw new Exception("Copy failed.");
                 if (g.b != f.b) throw new Exception("Copy failed.");
             }
 
             {
                 StructWithBool f = new StructWithBool() { a = true, b = 2 };
-                System.Console.WriteLine();
-                buffer.DeepCopyToImplementation(f, out object j);
-                buffer.DeepCopyFromImplementation(j, out object too, typeof(StructWithBool));
-                var g = (StructWithBool)too;
+                var size = Marshal.SizeOf(buffer.CreateImplementationType(typeof(StructWithBool)));
+                IntPtr gp = buffer.New(size);
+                buffer.DeepCopyToImplementation(f, gp);
+                buffer.DeepCopyFromImplementation(gp, out object go, f.GetType());
+                var g = (StructWithBool)go;
                 if (g.a != f.a) throw new Exception("Copy failed.");
                 if (g.b != f.b) throw new Exception("Copy failed.");
             }
 
             {
                 StructWithBool f = new StructWithBool() { a = false, b = 2 };
-                System.Console.WriteLine();
-                buffer.DeepCopyToImplementation(f, out object j);
-                buffer.DeepCopyFromImplementation(j, out object too, typeof(StructWithBool));
-                var g = (StructWithBool)too;
+                var size = Marshal.SizeOf(buffer.CreateImplementationType(typeof(StructWithBool)));
+                IntPtr gp = buffer.New(size);
+                buffer.DeepCopyToImplementation(f, gp);
+                buffer.DeepCopyFromImplementation(gp, out object go, f.GetType());
+                var g = (StructWithBool)go;
                 if (g.a != f.a) throw new Exception("Copy failed.");
                 if (g.b != f.b) throw new Exception("Copy failed.");
             }
@@ -488,18 +486,17 @@ namespace GpuCore
                 var n2 = new TreeNode() { Left = null, Right = null, Id = 2 };
                 var n3 = new TreeNode() { Left = n1, Right = n2, Id = 3 };
                 var n4 = new TreeNode() { Left = n3, Right = null, Id = 4 };
+                var f = n4;
                 var bt = buffer.CreateImplementationType(typeof(TreeNode));
-                System.Console.WriteLine();
-                System.Console.WriteLine(Buffers.IsBlittable(bt));//// 
-                Buffers.OutputType(typeof(TreeNode));
-                Buffers.OutputType(bt);
-                buffer.DeepCopyToImplementation(n4, out object j);
-                buffer.DeepCopyFromImplementation(j, out object too, typeof(TreeNode));
-                var o4 = (TreeNode) too;
-                if (o4.Id != n4.Id) throw new Exception("Copy failed.");
-                if (o4.Left.Id != n3.Id) throw new Exception("Copy failed.");
-                if (o4.Left.Left.Id != n1.Id) throw new Exception("Copy failed.");
-                if (o4.Left.Right.Id != n2.Id) throw new Exception("Copy failed.");
+                var size = Marshal.SizeOf(buffer.CreateImplementationType(bt));
+                IntPtr gp = buffer.New(size);
+                buffer.DeepCopyToImplementation(f, gp);
+                buffer.DeepCopyFromImplementation(gp, out object go, f.GetType());
+                var g = (TreeNode)go;
+                if (g.Id != n4.Id) throw new Exception("Copy failed.");
+                if (g.Left.Id != n3.Id) throw new Exception("Copy failed.");
+                if (g.Left.Left.Id != n1.Id) throw new Exception("Copy failed.");
+                if (g.Left.Right.Id != n2.Id) throw new Exception("Copy failed.");
             }
         }
     }

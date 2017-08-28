@@ -320,8 +320,9 @@ namespace GpuCore
         /// </summary>
         /// <param name="from"></param>
         /// <param name="to"></param>
-        public void DeepCopyToImplementation(object from, out object to)
+        public unsafe void DeepCopyToImplementation(object from, void* to_buffer)
         {
+            // Copy object to a buffer.
             try
             {
                 {
@@ -336,14 +337,13 @@ namespace GpuCore
                     }
                     if (is_null)
                     {
-                        to = null;
-                        return;
+                        throw new Exception("Unknown type of object.");
                     }
                 }
 
                 if (_allocated_objects.ContainsKey(from))
                 {
-                    to = _allocated_objects[from];
+                   // to = _allocated_objects[from];
                     return;
                 }
 
@@ -352,42 +352,43 @@ namespace GpuCore
                 // Let's start with basic types.
                 if (hostType.FullName.Equals("System.Object"))
                 {
-                    to = from;
+                    throw new Exception("Type is System.Object, but I don't know what to represent it as.");
+                    Cp(to_buffer, from);
                     return;
                 }
                 if (hostType.FullName.Equals("System.Int16"))
                 {
-                    to = (System.Int16)from;
+                    Cp(to_buffer, from);
                     return;
                 }
                 if (hostType.FullName.Equals("System.Int32"))
                 {
-                    to = (System.Int32)from;
+                    Cp(to_buffer, from);
                     return;
                 }
                 if (hostType.FullName.Equals("System.Int64"))
                 {
-                    to = (System.Int64)from;
+                    Cp(to_buffer, from);
                     return;
                 }
                 if (hostType.FullName.Equals("System.UInt16"))
                 {
-                    to = (System.UInt16)from;
+                    Cp(to_buffer, from);
                     return;
                 }
                 if (hostType.FullName.Equals("System.UInt32"))
                 {
-                    to = (System.UInt32)from;
+                    Cp(to_buffer, from);
                     return;
                 }
                 if (hostType.FullName.Equals("System.UInt64"))
                 {
-                    to = (System.UInt64)from;
+                    Cp(to_buffer, from);
                     return;
                 }
                 if (hostType.FullName.Equals("System.IntPtr"))
                 {
-                    to = (System.IntPtr)from;
+                    Cp(to_buffer, from);
                     return;
                 }
 
@@ -395,14 +396,17 @@ namespace GpuCore
                 if (hostType.FullName.Equals("System.Boolean"))
                 {
                     bool v = (bool)from;
-                    to = (System.Byte)(v ? 1 : 0);
+                    System.Byte v2 = (System.Byte)(v ? 1 : 0);
+                    Cp(to_buffer, v2);
                     return;
                 }
 
                 // Map char into uint16.
                 if (hostType.FullName.Equals("System.Char"))
                 {
-                    to = (System.UInt16)from;
+                    Char v = (Char)from;
+                    System.UInt16 v2 = (System.UInt16)v;
+                    Cp(to_buffer, v2);
                     return;
                 }
 
@@ -433,37 +437,45 @@ namespace GpuCore
 
                 if (hostType.IsArray)
                 {
-                    to = Activator.CreateInstance(blittable_type);
-                    // Set fields.
+                    // An array is represented as a pointer/length struct.
+                    // The data in the array is contained in the buffer following the length.
+                    // The buffer allocated must be big enough to contain all data. Use
+                    // Buffer.SizeOf(array) to get the representation buffer size.
+                    // If the element is an array or a class, a buffer is allocated for each
+                    // element, and an intptr used in the array.
                     var a = (Array)from;
                     unsafe
                     {
+                        IntPtr destIntPtr = IntPtr.Zero;
+
+                        IntPtr srcIntPtr = (IntPtr)GCHandle.Alloc(from);
                         var blittable_element_type = CreateImplementationType(from.GetType().GetElementType());
-                        var intptr = New(blittable_element_type, a.Length);
                         var len = a.Length;
-
-                        System.Reflection.FieldInfo[] tfi = blittable_type.GetFields();
-                        foreach (System.Reflection.FieldInfo fi in tfi)
+                        int bytes;
+                        if (from.GetType().GetElementType().IsClass)
                         {
-                            String na = fi.Name;
-                            if (na == "ptr")
-                            {
-                                var tfield = tfi.Where(k => k.Name == fi.Name).FirstOrDefault();
-                                if (tfield == null)
-                                    throw new ArgumentException("Field not found.");
-                                CopyToGPUBuffer(a, intptr,
-                                    CreateImplementationType(a.GetType().GetElementType(), false, false));
-                                tfield.SetValue(to, intptr);
-                            }
-                            if (na == "len")
-                            {
-                                var tfield = tfi.Where(k => k.Name == fi.Name).FirstOrDefault();
-                                if (tfield == null)
-                                    throw new ArgumentException("Field not found.");
-                                tfield.SetValue(to, len);
-                            }
+                            // We create a buffer for the class, and stuff a pointer in the array.
+                            bytes = Marshal.SizeOf(typeof(IntPtr)) // Pointer
+                                        + Marshal.SizeOf(typeof(Int32)) // length
+                                        + Marshal.SizeOf(typeof(IntPtr)) * len; // elements
                         }
-
+                        else
+                        {
+                            bytes = Marshal.SizeOf(typeof(IntPtr)) // Pointer
+                                        + Marshal.SizeOf(typeof(Int32)) // length
+                                        + Marshal.SizeOf(blittable_element_type) * len; // elements
+                        }
+                        destIntPtr = (IntPtr)to_buffer;
+                        IntPtr df0 = new IntPtr((long)destIntPtr);
+                        IntPtr df1 = new IntPtr(Marshal.SizeOf(typeof(IntPtr)) // Pointer
+                                                + (long)destIntPtr);
+                        IntPtr df2 = new IntPtr(Marshal.SizeOf(typeof(IntPtr)) // Pointer
+                                                + Marshal.SizeOf(typeof(Int32)) // length
+                                                + (long)destIntPtr);
+                        System.Reflection.FieldInfo[] tfi = blittable_type.GetFields();
+                        Cp(df0, df2); // Copy df2 to *df0
+                        Cp(df1, len);
+                        CopyToGPUBuffer(a, df2, CreateImplementationType(a.GetType().GetElementType()));
                     }
                     return;
                 }
@@ -472,8 +484,8 @@ namespace GpuCore
                 {
                     Type f = from.GetType();
                     Type tr = blittable_type;
-
-                    to = Activator.CreateInstance(blittable_type);
+                    int size = Marshal.SizeOf(tr);
+                    void* ip = to_buffer;
 
                     System.Reflection.FieldInfo[] ffi = f.GetFields();
                     System.Reflection.FieldInfo[] tfi = tr.GetFields();
@@ -482,31 +494,60 @@ namespace GpuCore
                     {
                         object field_value = fi.GetValue(from);
                         String na = fi.Name;
-                        // Convert.
-                        object res;
-                        DeepCopyToImplementation(field_value, out res);
-                        // Copy.
                         var tfield = tfi.Where(k => k.Name == fi.Name).FirstOrDefault();
                         if (tfield == null)
                             throw new ArgumentException("Field not found.");
+                        // Copy.
+                        var field_size = Marshal.SizeOf(tfield.FieldType);
                         // Note, if field is array, class, or struct, convert to IntPtr.
-                        if (fi.FieldType.IsArray || fi.FieldType.IsClass)
+                        if (fi.FieldType.IsArray)
                         {
-                            if (res != null)
+                            // Allocate a whole new buffer, copy to that, place buffer pointer into field at ip.
+                            if (field_value != null)
                             {
-                                var handle = GCHandle.Alloc(res, GCHandleType.Pinned);
-                                var ptr = (IntPtr)handle;
-                                System.Console.WriteLine(ptr.ToString("x"));
-                                // Make sure it can be reversed.
-                                GCHandle test = (GCHandle) ptr;
-                                res = ptr;
+                                Array ff = (Array) field_value;
+                                var size2 = Marshal.SizeOf(typeof(IntPtr)) // Pointer
+                                           + Marshal.SizeOf(typeof(Int32)) // length
+                                           + Marshal.SizeOf(typeof(Int32)) * ff.Length; // Array values
+                                IntPtr gp = New(size2);
+                                DeepCopyToImplementation(field_value, gp);
+                                DeepCopyToImplementation(gp, ip);
+                                ip = (void*)((long)ip + Marshal.SizeOf(typeof(IntPtr)));
                             }
                             else
                             {
-                                res = IntPtr.Zero;
+                                field_value = IntPtr.Zero;
+                                DeepCopyToImplementation(field_value, ip);
+                                ip = (void*)((long)ip + Marshal.SizeOf(typeof(IntPtr)));
                             }
                         }
-                        tfield.SetValue(to, res);
+                        else if (fi.FieldType.IsClass)
+                        {
+                            // Allocate a whole new buffer, copy to that, place buffer pointer into field at ip.
+                            if (field_value != null)
+                            {
+                                var size2 = Marshal.SizeOf(tfield.FieldType);
+                                IntPtr gp = New(size2);
+                                DeepCopyToImplementation(field_value, gp);
+                                DeepCopyToImplementation(gp, ip);
+                                ip = (void*)((long)ip + Marshal.SizeOf(typeof(IntPtr)));
+                            }
+                            else
+                            {
+                                field_value = IntPtr.Zero;
+                                DeepCopyToImplementation(field_value, ip);
+                                ip = (void*)((long)ip + Marshal.SizeOf(typeof(IntPtr)));
+                            }
+                        }
+                        else if (IsStruct(fi.FieldType))
+                        {
+                            throw new Exception("Whoops.");
+                        }
+                        else
+                        {
+                            DeepCopyToImplementation(field_value, ip);
+                            ip = (void*)((long)ip + field_size);
+                        }
                     }
 
                     return;
@@ -522,92 +563,74 @@ namespace GpuCore
             }
         }
 
-        public void DeepCopyFromImplementation(object from, out object to, Type target_type)
+        public void DeepCopyToImplementation(object from, IntPtr to_buffer)
         {
-            Type f_type = from.GetType();
+            unsafe
+            {
+                DeepCopyToImplementation(from, (void*)to_buffer);
+            }
+        }
+
+        public unsafe void DeepCopyFromImplementation(IntPtr from, out object to, Type target_type)
+        {
             Type t_type = target_type;
+            Type f_type = CreateImplementationType(t_type);
             try
             {
-                if (f_type == typeof(IntPtr) && t_type != typeof(IntPtr))
-                {
-                    bool is_null = false;
-                    try
-                    {
-                        if (from.Equals(IntPtr.Zero))
-                        {
-                            is_null = true;
-                        }
-                    }
-                    catch (Exception e)
-                    {
-                    }
-                    if (is_null)
-                    {
-                        to = null;
-                        return;
-                    }
-                    // Get blittable type for object.
-                    f_type = CreateImplementationType(t_type, false, false);
-                    var xxx = (IntPtr)from;
-                    System.Console.WriteLine(xxx.ToString("x"));
-                    // Make sure it can be reversed.
-                    GCHandle test = (GCHandle)xxx;
-                    // Convert back to object.
-                    GCHandle handle2 = (GCHandle)xxx;
-                    from = handle2.Target;
-                }
-
-                if (_allocated_objects.ContainsKey(from))
-                {
-                    to = _allocated_objects[from];
-                    return;
-                }
 
                 if (t_type.FullName.Equals("System.Object"))
                 {
-                    to = from;
+                    object o = Marshal.PtrToStructure<System.Object>(from);
+                    to = o;
                     return;
                 }
                 if (t_type.FullName.Equals("System.Int16"))
                 {
-                    to = (System.Int16)from;
+                    object o = Marshal.PtrToStructure<System.Int16>(from);
+                    to = o;
                     return;
                 }
                 if (t_type.FullName.Equals("System.Int32"))
                 {
-                    to = (System.Int32)from;
+                    object o = Marshal.PtrToStructure<System.Int32>(from);
+                    to = o;
                     return;
                 }
                 if (t_type.FullName.Equals("System.Int64"))
                 {
-                    to = (System.Int64)from;
+                    object o = Marshal.PtrToStructure<System.Int64>(from);
+                    to = o;
                     return;
                 }
                 if (t_type.FullName.Equals("System.UInt16"))
                 {
-                    to = (System.UInt16)from;
+                    object o = Marshal.PtrToStructure<System.UInt16>(from);
+                    to = o;
                     return;
                 }
                 if (t_type.FullName.Equals("System.UInt32"))
                 {
-                    to = (System.UInt32)from;
+                    object o = Marshal.PtrToStructure<System.UInt32>(from);
+                    to = o;
                     return;
                 }
                 if (t_type.FullName.Equals("System.UInt64"))
                 {
-                    to = (System.UInt64)from;
+                    object o = Marshal.PtrToStructure<System.UInt64>(from);
+                    to = o;
                     return;
                 }
                 if (t_type.FullName.Equals("System.IntPtr"))
                 {
-                    to = (System.IntPtr)from;
+                    object o = Marshal.PtrToStructure<System.IntPtr>(from);
+                    to = o;
                     return;
                 }
 
                 // Map boolean into byte.
                 if (t_type.FullName.Equals("System.Boolean"))
                 {
-                    byte v = (byte)from;
+                    byte v = *(byte*)from;
                     to = (System.Boolean)(v == 1 ? true : false);
                     return;
                 }
@@ -644,61 +667,64 @@ namespace GpuCore
 
                 if (t_type.IsArray)
                 {
-                    unsafe
-                    {
-                        // "from" must be a structure with two fields, "ptr" and "len".
-                        void* ptr = null;
-                        var intptr_src = new IntPtr(ptr);
-                        var len = 0;
-
-                        System.Reflection.FieldInfo[] ffi = f_type.GetFields();
-                        foreach (System.Reflection.FieldInfo fi in ffi)
-                        {
-                            String na = fi.Name;
-                            if (na == "ptr")
-                            {
-                                var tfield = ffi.Where(k => k.Name == fi.Name).FirstOrDefault();
-                                if (tfield == null)
-                                    throw new ArgumentException("Field not found.");
-                                intptr_src = (IntPtr)tfield.GetValue(from);
-                            }
-                            if (na == "len")
-                            {
-                                var tfield = ffi.Where(k => k.Name == fi.Name).FirstOrDefault();
-                                if (tfield == null)
-                                    throw new ArgumentException("Field not found.");
-                                len = (int)tfield.GetValue(from);
-                            }
-                        }
-
-                        var to_array = Array.CreateInstance(t_type.GetElementType(), new int[1] { len });
-                        CopyFromGPUBuffer(intptr_src, to_array, t_type.GetElementType());
-                        to = to_array;
-                    }
+                    // "from" is assumed to be a unmanaged buffer
+                    // with three fields, "ptr", "len", "data".
+                    byte * ptr = (byte*) from;
+                    int len = *(int*)((long)(byte*)from + Marshal.SizeOf(typeof(IntPtr)));
+                    IntPtr intptr_src = *(IntPtr*)((long)(byte*)from);
+                    // For now, only one-dimension, given "len".
+                    var to_array = Array.CreateInstance(t_type.GetElementType(), new int[1] { len });
+                    CopyFromGPUBuffer(intptr_src, to_array, t_type.GetElementType());
+                    to = to_array;
                     return;
                 }
 
                 if (IsStruct(t_type) || t_type.IsClass)
                 {
-                    System.Reflection.FieldInfo[] ffi = f_type.GetFields();
+                    IntPtr ip = from;
+                    if (ip == IntPtr.Zero)
+                    {
+                        to = null;
+                        return;
+                    }
+
                     to = Activator.CreateInstance(t_type);
+
+                    System.Reflection.FieldInfo[] ffi = f_type.GetFields();
                     System.Reflection.FieldInfo[] tfi = t_type.GetFields();
+
+
                     for (int i = 0; i < ffi.Length; ++i)
                     {
+                        var ffield = ffi[i];
+                        var tfield = tfi.Where(k => k.Name == ffield.Name).FirstOrDefault();
+                        if (tfield == null) throw new ArgumentException("Field not found.");
+                        // Note, special case all field types.
+                        if (tfield.FieldType.IsArray)
                         {
-                            var fi = ffi[i];
-                            var ti = tfi[i];
-                            object field_value = fi.GetValue(from);
-                            String na = fi.Name;
-                            // Convert.
-                            object res;
-                            DeepCopyFromImplementation(field_value, out res, ti.FieldType);
-                            var tfield = tfi.Where(k => k.Name == fi.Name).FirstOrDefault();
-                            if (tfield == null)
-                                throw new ArgumentException("Field not found.");
-                            tfield.SetValue(to, res);
+                            int field_size = Marshal.SizeOf(typeof(IntPtr));
+                            IntPtr fffff = (IntPtr)Marshal.PtrToStructure<IntPtr>(ip);
+                            DeepCopyFromImplementation(fffff, out object tooo, tfield.FieldType);
+                            tfield.SetValue(to, tooo);
+                            ip = (IntPtr)((long)ip + field_size);
+                        }
+                        else if (tfield.FieldType.IsClass)
+                        {
+                            int field_size = Marshal.SizeOf(typeof(IntPtr));
+                            IntPtr fffff = (IntPtr)Marshal.PtrToStructure<IntPtr>(ip);
+                            DeepCopyFromImplementation(fffff, out object tooo, tfield.FieldType);
+                            tfield.SetValue(to, tooo);
+                            ip = (IntPtr)((long)ip + field_size);
+                        }
+                        else
+                        {
+                            int field_size = Marshal.SizeOf(ffield.FieldType);
+                            DeepCopyFromImplementation(ip, out object tooo, tfield.FieldType);
+                            tfield.SetValue(to, tooo);
+                            ip = (IntPtr)((long)ip + field_size);
                         }
                     }
+
                     return;
                 }
 
@@ -712,15 +738,13 @@ namespace GpuCore
             }
         }
 
-        public IntPtr CopyToGPUBuffer(Array from, IntPtr cpp_array, Type blittable_element_type)
+        public unsafe IntPtr CopyToGPUBuffer(Array from, IntPtr cpp_array, Type blittable_element_type)
         {
             IntPtr byte_ptr = cpp_array;
             int size_element = Marshal.SizeOf(blittable_element_type);
             for (int i = 0; i < from.Length; ++i)
             {
-                object obj = Activator.CreateInstance(blittable_element_type);
-                DeepCopyToImplementation(from.GetValue(i), out obj);
-                Marshal.StructureToPtr(obj, byte_ptr, false);
+                DeepCopyToImplementation(from.GetValue(i), (byte*)byte_ptr);
                 byte_ptr = new IntPtr((long)byte_ptr + size_element);
             }
             return cpp_array;
@@ -735,7 +759,7 @@ namespace GpuCore
                 // copy.
                 object obj = Marshal.PtrToStructure(mem, blittable_element_type);
                 object to_obj = to.GetValue(i);
-                DeepCopyFromImplementation(obj, out to_obj, to.GetType().GetElementType());
+                DeepCopyFromImplementation(mem, out to_obj, to.GetType().GetElementType());
                 to.SetValue(to_obj, i);
                 mem = new IntPtr((long)mem + size_element);
             }
@@ -772,10 +796,8 @@ namespace GpuCore
         /// Allocated a GPU managed buffer.
         /// Code based on https://www.codeproject.com/Articles/32125/Unmanaged-Arrays-in-C-No-Problem
         /// </summary>
-        public IntPtr New(Type t, int elementCount)
+        public IntPtr New(int bytes)
         {
-            if (!IsBlittable(t)) throw new Exception("Fucked!");
-
             if (false)
             {
                 // Let's try allocating a block of memory on the host. cuMemHostAlloc allocates bytesize
@@ -801,7 +823,7 @@ namespace GpuCore
 
             {
                 // Allocate Unified Memory.
-                var size = Marshal.SizeOf(t) * elementCount;
+                var size = bytes;
                 var res = Cuda.cuMemAllocManaged(out IntPtr pointer, (uint)size, (uint)Swigged.Cuda.CUmemAttach_flags.CU_MEM_ATTACH_GLOBAL);
                 if (res != CUresult.CUDA_SUCCESS) throw new Exception("cuMemAllocManged failed.");
                 return pointer;
@@ -809,7 +831,7 @@ namespace GpuCore
 
             if (false)
             {
-                return Marshal.AllocHGlobal(Marshal.SizeOf(t) * elementCount);
+                return Marshal.AllocHGlobal(bytes);
             }
         }
 
@@ -851,6 +873,22 @@ namespace GpuCore
                 {
                     dest[i] = src[i];
                 }
+            }
+        }
+
+        public void Cp(IntPtr destPtr, object src)
+        {
+            unsafe
+            {
+                Marshal.StructureToPtr(src, destPtr, false);
+            }
+        }
+
+        public unsafe void Cp(void* destPtr, object src)
+        {
+            unsafe
+            {
+                Marshal.StructureToPtr(src, (IntPtr)destPtr, false);
             }
         }
     }
