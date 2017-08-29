@@ -7,9 +7,8 @@ using System.Runtime.Serialization;
 using System.Text;
 using Swigged.Cuda;
 
-namespace GpuCore
+namespace DeepCopyGPU
 {
-
     /// <summary>
     /// This code marshals C#/Net data structures that have an unknown implementation to/from
     /// the implementation for NVIDIA GPUs.
@@ -23,9 +22,9 @@ namespace GpuCore
     public class Buffers
     {
         private CUcontext _pctx;
-        Asm _asm;
-        static Dictionary<string, string> _type_name_map = new Dictionary<string, string>();
-        static Dictionary<object, IntPtr> _allocated_objects = new Dictionary<object, IntPtr>();
+        private Asm _asm;
+        private Dictionary<string, string> _type_name_map = new Dictionary<string, string>();
+        private Dictionary<object, IntPtr> _allocated_objects = new Dictionary<object, IntPtr>();
 
         public Buffers()
         {
@@ -444,39 +443,32 @@ namespace GpuCore
                     // If the element is an array or a class, a buffer is allocated for each
                     // element, and an intptr used in the array.
                     var a = (Array)from;
-                    unsafe
+                    var blittable_element_type = CreateImplementationType(from.GetType().GetElementType());
+                    var len = a.Length;
+                    int bytes;
+                    if (from.GetType().GetElementType().IsClass)
                     {
-                        IntPtr destIntPtr = IntPtr.Zero;
-
-                        IntPtr srcIntPtr = (IntPtr)GCHandle.Alloc(from);
-                        var blittable_element_type = CreateImplementationType(from.GetType().GetElementType());
-                        var len = a.Length;
-                        int bytes;
-                        if (from.GetType().GetElementType().IsClass)
-                        {
-                            // We create a buffer for the class, and stuff a pointer in the array.
-                            bytes = Marshal.SizeOf(typeof(IntPtr)) // Pointer
-                                        + Marshal.SizeOf(typeof(Int32)) // length
-                                        + Marshal.SizeOf(typeof(IntPtr)) * len; // elements
-                        }
-                        else
-                        {
-                            bytes = Marshal.SizeOf(typeof(IntPtr)) // Pointer
-                                        + Marshal.SizeOf(typeof(Int32)) // length
-                                        + Marshal.SizeOf(blittable_element_type) * len; // elements
-                        }
-                        destIntPtr = (IntPtr)to_buffer;
-                        IntPtr df0 = new IntPtr((long)destIntPtr);
-                        IntPtr df1 = new IntPtr(Marshal.SizeOf(typeof(IntPtr)) // Pointer
-                                                + (long)destIntPtr);
-                        IntPtr df2 = new IntPtr(Marshal.SizeOf(typeof(IntPtr)) // Pointer
-                                                + Marshal.SizeOf(typeof(Int32)) // length
-                                                + (long)destIntPtr);
-                        System.Reflection.FieldInfo[] tfi = blittable_type.GetFields();
-                        Cp(df0, df2); // Copy df2 to *df0
-                        Cp(df1, len);
-                        CopyToGPUBuffer(a, df2, CreateImplementationType(a.GetType().GetElementType()));
+                        // We create a buffer for the class, and stuff a pointer in the array.
+                        bytes = Marshal.SizeOf(typeof(IntPtr)) // Pointer
+                                    + Marshal.SizeOf(typeof(Int32)) // length
+                                    + Marshal.SizeOf(typeof(IntPtr)) * len; // elements
                     }
+                    else
+                    {
+                        bytes = Marshal.SizeOf(typeof(IntPtr)) // Pointer
+                                    + Marshal.SizeOf(typeof(Int32)) // length
+                                    + Marshal.SizeOf(blittable_element_type) * len; // elements
+                    }
+                    var destIntPtr = (byte*)to_buffer;
+                    byte* df0 = destIntPtr;
+                    byte* df1 = Marshal.SizeOf(typeof(IntPtr)) // Pointer
+                                            + destIntPtr;
+                    byte* df2 = Marshal.SizeOf(typeof(IntPtr)) // Pointer
+                                            + Marshal.SizeOf(typeof(Int32)) // length
+                                            + destIntPtr;
+                    Cp(df0, (IntPtr)df2); // Copy df2 to *df0
+                    Cp(df1, len);
+                    Cp(df2, a, CreateImplementationType(a.GetType().GetElementType()));
                     return;
                 }
 
@@ -495,11 +487,8 @@ namespace GpuCore
                         object field_value = fi.GetValue(from);
                         String na = fi.Name;
                         var tfield = tfi.Where(k => k.Name == fi.Name).FirstOrDefault();
-                        if (tfield == null)
-                            throw new ArgumentException("Field not found.");
-                        // Copy.
+                        if (tfield == null) throw new ArgumentException("Field not found.");
                         var field_size = Marshal.SizeOf(tfield.FieldType);
-                        // Note, if field is array, class, or struct, convert to IntPtr.
                         if (fi.FieldType.IsArray)
                         {
                             // Allocate a whole new buffer, copy to that, place buffer pointer into field at ip.
@@ -669,12 +658,12 @@ namespace GpuCore
                 {
                     // "from" is assumed to be a unmanaged buffer
                     // with three fields, "ptr", "len", "data".
-                    byte * ptr = (byte*) from;
                     int len = *(int*)((long)(byte*)from + Marshal.SizeOf(typeof(IntPtr)));
-                    IntPtr intptr_src = *(IntPtr*)((long)(byte*)from);
+                    IntPtr intptr_src = *(IntPtr*)(from);
+                    byte* ptr = (byte*)intptr_src;
                     // For now, only one-dimension, given "len".
                     var to_array = Array.CreateInstance(t_type.GetElementType(), new int[1] { len });
-                    CopyFromGPUBuffer(intptr_src, to_array, t_type.GetElementType());
+                    Cp((void*) ptr, to_array, t_type.GetElementType());
                     to = to_array;
                     return;
                 }
@@ -738,22 +727,20 @@ namespace GpuCore
             }
         }
 
-        public unsafe IntPtr CopyToGPUBuffer(Array from, IntPtr cpp_array, Type blittable_element_type)
+        private unsafe void Cp(byte* destination_ptr, Array from, Type blittable_element_type)
         {
-            IntPtr byte_ptr = cpp_array;
             int size_element = Marshal.SizeOf(blittable_element_type);
             for (int i = 0; i < from.Length; ++i)
             {
-                DeepCopyToImplementation(from.GetValue(i), (byte*)byte_ptr);
-                byte_ptr = new IntPtr((long)byte_ptr + size_element);
+                DeepCopyToImplementation(from.GetValue(i), destination_ptr);
+                destination_ptr = destination_ptr + size_element;
             }
-            return cpp_array;
         }
 
-        public IntPtr CopyFromGPUBuffer(IntPtr a, Array to, Type blittable_element_type)
+        private unsafe void Cp(void* src_ptr, Array to, Type blittable_element_type)
         {
             int size_element = Marshal.SizeOf(blittable_element_type);
-            IntPtr mem = a;
+            IntPtr mem = (IntPtr) src_ptr;
             for (int i = 0; i < to.Length; ++i)
             {
                 // copy.
@@ -763,7 +750,6 @@ namespace GpuCore
                 to.SetValue(to_obj, i);
                 mem = new IntPtr((long)mem + size_element);
             }
-            return a;
         }
 
         public static string OutputType(System.Type type)
@@ -835,7 +821,7 @@ namespace GpuCore
             }
         }
 
-        public unsafe IntPtr NewAndInit(Type t, int elementCount)
+        public IntPtr NewAndInit(Type t, int elementCount)
         {
             unsafe
             {
@@ -874,6 +860,11 @@ namespace GpuCore
                     dest[i] = src[i];
                 }
             }
+        }
+
+        public unsafe void Cp(byte* dest, byte* src, int size)
+        {
+            for (int i = 0; i < size; i++) dest[i] = src[i];
         }
 
         public void Cp(IntPtr destPtr, object src)

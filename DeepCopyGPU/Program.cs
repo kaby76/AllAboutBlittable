@@ -4,7 +4,7 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using Swigged.Cuda;
 
-namespace GpuCore
+namespace DeepCopyGPU
 {
     public struct StructWithInt32
     {
