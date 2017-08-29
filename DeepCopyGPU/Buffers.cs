@@ -25,6 +25,12 @@ namespace DeepCopyGPU
         private Asm _asm;
         private Dictionary<string, string> _type_name_map = new Dictionary<string, string>();
         private Dictionary<object, IntPtr> _allocated_objects = new Dictionary<object, IntPtr>();
+        private int _level = 0;
+
+        public void ClearAllocatedObjects()
+        {
+            _allocated_objects = new Dictionary<object, IntPtr>();
+        }
 
         public Buffers()
         {
@@ -324,6 +330,8 @@ namespace DeepCopyGPU
             // Copy object to a buffer.
             try
             {
+                _level++;
+
                 {
                     bool is_null = false;
                     try
@@ -338,12 +346,6 @@ namespace DeepCopyGPU
                     {
                         throw new Exception("Unknown type of object.");
                     }
-                }
-
-                if (_allocated_objects.ContainsKey(from))
-                {
-                   // to = _allocated_objects[from];
-                    return;
                 }
 
                 Type hostType = from.GetType();
@@ -394,8 +396,8 @@ namespace DeepCopyGPU
                 // Map boolean into byte.
                 if (hostType.FullName.Equals("System.Boolean"))
                 {
-                    bool v = (bool)from;
-                    System.Byte v2 = (System.Byte)(v ? 1 : 0);
+                    bool v = (bool) from;
+                    System.Byte v2 = (System.Byte) (v ? 1 : 0);
                     Cp(to_buffer, v2);
                     return;
                 }
@@ -403,8 +405,8 @@ namespace DeepCopyGPU
                 // Map char into uint16.
                 if (hostType.FullName.Equals("System.Char"))
                 {
-                    Char v = (Char)from;
-                    System.UInt16 v2 = (System.UInt16)v;
+                    Char v = (Char) from;
+                    System.UInt16 v2 = (System.UInt16) v;
                     Cp(to_buffer, v2);
                     return;
                 }
@@ -436,109 +438,141 @@ namespace DeepCopyGPU
 
                 if (hostType.IsArray)
                 {
-                    // An array is represented as a pointer/length struct.
-                    // The data in the array is contained in the buffer following the length.
-                    // The buffer allocated must be big enough to contain all data. Use
-                    // Buffer.SizeOf(array) to get the representation buffer size.
-                    // If the element is an array or a class, a buffer is allocated for each
-                    // element, and an intptr used in the array.
-                    var a = (Array)from;
-                    var blittable_element_type = CreateImplementationType(from.GetType().GetElementType());
-                    var len = a.Length;
-                    int bytes;
-                    if (from.GetType().GetElementType().IsClass)
+                    if (_allocated_objects.ContainsKey(from))
                     {
-                        // We create a buffer for the class, and stuff a pointer in the array.
-                        bytes = Marshal.SizeOf(typeof(IntPtr)) // Pointer
-                                    + Marshal.SizeOf(typeof(Int32)) // length
-                                    + Marshal.SizeOf(typeof(IntPtr)) * len; // elements
+                        // Full object already stuffed into implementation buffer.
                     }
                     else
                     {
-                        bytes = Marshal.SizeOf(typeof(IntPtr)) // Pointer
+                        _allocated_objects[from] = (IntPtr) to_buffer;
+
+                        // An array is represented as a pointer/length struct.
+                        // The data in the array is contained in the buffer following the length.
+                        // The buffer allocated must be big enough to contain all data. Use
+                        // Buffer.SizeOf(array) to get the representation buffer size.
+                        // If the element is an array or a class, a buffer is allocated for each
+                        // element, and an intptr used in the array.
+                        var a = (Array) from;
+                        var blittable_element_type = CreateImplementationType(from.GetType().GetElementType());
+                        var len = a.Length;
+                        int bytes;
+                        if (from.GetType().GetElementType().IsClass)
+                        {
+                            // We create a buffer for the class, and stuff a pointer in the array.
+                            bytes = Marshal.SizeOf(typeof(IntPtr)) // Pointer
+                                    + Marshal.SizeOf(typeof(Int32)) // length
+                                    + Marshal.SizeOf(typeof(IntPtr)) * len; // elements
+                        }
+                        else
+                        {
+                            bytes = Marshal.SizeOf(typeof(IntPtr)) // Pointer
                                     + Marshal.SizeOf(typeof(Int32)) // length
                                     + Marshal.SizeOf(blittable_element_type) * len; // elements
+                        }
+                        var destIntPtr = (byte*) to_buffer;
+                        byte* df0 = destIntPtr;
+                        byte* df1 = Marshal.SizeOf(typeof(IntPtr)) // Pointer
+                                    + destIntPtr;
+                        byte* df2 = Marshal.SizeOf(typeof(IntPtr)) // Pointer
+                                    + Marshal.SizeOf(typeof(Int32)) // length
+                                    + destIntPtr;
+                        Cp(df0, (IntPtr) df2); // Copy df2 to *df0
+                        Cp(df1, len);
+                        Cp(df2, a, CreateImplementationType(a.GetType().GetElementType()));
                     }
-                    var destIntPtr = (byte*)to_buffer;
-                    byte* df0 = destIntPtr;
-                    byte* df1 = Marshal.SizeOf(typeof(IntPtr)) // Pointer
-                                            + destIntPtr;
-                    byte* df2 = Marshal.SizeOf(typeof(IntPtr)) // Pointer
-                                            + Marshal.SizeOf(typeof(Int32)) // length
-                                            + destIntPtr;
-                    Cp(df0, (IntPtr)df2); // Copy df2 to *df0
-                    Cp(df1, len);
-                    Cp(df2, a, CreateImplementationType(a.GetType().GetElementType()));
                     return;
                 }
 
                 if (IsStruct(hostType) || hostType.IsClass)
                 {
-                    Type f = from.GetType();
-                    Type tr = blittable_type;
-                    int size = Marshal.SizeOf(tr);
-                    void* ip = to_buffer;
-
-                    System.Reflection.FieldInfo[] ffi = f.GetFields();
-                    System.Reflection.FieldInfo[] tfi = tr.GetFields();
-
-                    foreach (System.Reflection.FieldInfo fi in ffi)
+                    if (_allocated_objects.ContainsKey(from))
                     {
-                        object field_value = fi.GetValue(from);
-                        String na = fi.Name;
-                        var tfield = tfi.Where(k => k.Name == fi.Name).FirstOrDefault();
-                        if (tfield == null) throw new ArgumentException("Field not found.");
-                        var field_size = Marshal.SizeOf(tfield.FieldType);
-                        if (fi.FieldType.IsArray)
+                        // Full object already stuffed into implementation buffer.
+                    }
+                    else
+                    {
+                        if (from.GetType().IsClass)
+                            _allocated_objects[from] = (IntPtr) to_buffer;
+
+                        Type f = from.GetType();
+                        Type tr = blittable_type;
+                        int size = Marshal.SizeOf(tr);
+                        void* ip = to_buffer;
+
+                        System.Reflection.FieldInfo[] ffi = f.GetFields();
+                        System.Reflection.FieldInfo[] tfi = tr.GetFields();
+
+                        foreach (System.Reflection.FieldInfo fi in ffi)
                         {
-                            // Allocate a whole new buffer, copy to that, place buffer pointer into field at ip.
-                            if (field_value != null)
+                            object field_value = fi.GetValue(from);
+                            String na = fi.Name;
+                            var tfield = tfi.Where(k => k.Name == fi.Name).FirstOrDefault();
+                            if (tfield == null) throw new ArgumentException("Field not found.");
+                            var field_size = Marshal.SizeOf(tfield.FieldType);
+                            if (fi.FieldType.IsArray)
                             {
-                                Array ff = (Array) field_value;
-                                var size2 = Marshal.SizeOf(typeof(IntPtr)) // Pointer
-                                           + Marshal.SizeOf(typeof(Int32)) // length
-                                           + Marshal.SizeOf(typeof(Int32)) * ff.Length; // Array values
-                                IntPtr gp = New(size2);
-                                DeepCopyToImplementation(field_value, gp);
-                                DeepCopyToImplementation(gp, ip);
-                                ip = (void*)((long)ip + Marshal.SizeOf(typeof(IntPtr)));
+                                // Allocate a whole new buffer, copy to that, place buffer pointer into field at ip.
+                                if (field_value != null)
+                                {
+                                    Array ff = (Array) field_value;
+                                    var size2 = Marshal.SizeOf(typeof(IntPtr)) // Pointer
+                                                + Marshal.SizeOf(typeof(Int32)) // length
+                                                + Marshal.SizeOf(typeof(Int32)) * ff.Length; // Array values
+                                    if (_allocated_objects.ContainsKey(field_value))
+                                    {
+                                        IntPtr gp = _allocated_objects[field_value];
+                                        DeepCopyToImplementation(gp, ip);
+                                    }
+                                    else
+                                    {
+                                        IntPtr gp = New(size2);
+                                        DeepCopyToImplementation(field_value, gp);
+                                        DeepCopyToImplementation(gp, ip);
+                                    }
+                                }
+                                else
+                                {
+                                    field_value = IntPtr.Zero;
+                                    DeepCopyToImplementation(field_value, ip);
+                                }
+                                ip = (void*) ((long) ip + Marshal.SizeOf(typeof(IntPtr)));
+                            }
+                            else if (fi.FieldType.IsClass)
+                            {
+                                // Allocate a whole new buffer, copy to that, place buffer pointer into field at ip.
+                                if (field_value != null)
+                                {
+                                    if (_allocated_objects.ContainsKey(field_value))
+                                    {
+                                        IntPtr gp = _allocated_objects[field_value];
+                                        DeepCopyToImplementation(gp, ip);
+                                    }
+                                    else
+                                    {
+                                        var size2 = Marshal.SizeOf(tfield.FieldType);
+                                        IntPtr gp = New(size2);
+                                        DeepCopyToImplementation(field_value, gp);
+                                        DeepCopyToImplementation(gp, ip);
+                                    }
+                                }
+                                else
+                                {
+                                    field_value = IntPtr.Zero;
+                                    DeepCopyToImplementation(field_value, ip);
+                                }
+                                ip = (void*) ((long) ip + Marshal.SizeOf(typeof(IntPtr)));
+                            }
+                            else if (IsStruct(fi.FieldType))
+                            {
+                                throw new Exception("Whoops.");
                             }
                             else
                             {
-                                field_value = IntPtr.Zero;
                                 DeepCopyToImplementation(field_value, ip);
-                                ip = (void*)((long)ip + Marshal.SizeOf(typeof(IntPtr)));
+                                ip = (void*) ((long) ip + field_size);
                             }
-                        }
-                        else if (fi.FieldType.IsClass)
-                        {
-                            // Allocate a whole new buffer, copy to that, place buffer pointer into field at ip.
-                            if (field_value != null)
-                            {
-                                var size2 = Marshal.SizeOf(tfield.FieldType);
-                                IntPtr gp = New(size2);
-                                DeepCopyToImplementation(field_value, gp);
-                                DeepCopyToImplementation(gp, ip);
-                                ip = (void*)((long)ip + Marshal.SizeOf(typeof(IntPtr)));
-                            }
-                            else
-                            {
-                                field_value = IntPtr.Zero;
-                                DeepCopyToImplementation(field_value, ip);
-                                ip = (void*)((long)ip + Marshal.SizeOf(typeof(IntPtr)));
-                            }
-                        }
-                        else if (IsStruct(fi.FieldType))
-                        {
-                            throw new Exception("Whoops.");
-                        }
-                        else
-                        {
-                            DeepCopyToImplementation(field_value, ip);
-                            ip = (void*)((long)ip + field_size);
                         }
                     }
-
                     return;
                 }
 
@@ -550,6 +584,10 @@ namespace DeepCopyGPU
                 System.Console.WriteLine(e);
                 throw e;
             }
+            finally
+            {
+                _level--;
+            }
         }
 
         public void DeepCopyToImplementation(object from, IntPtr to_buffer)
@@ -560,12 +598,16 @@ namespace DeepCopyGPU
             }
         }
 
-        public unsafe void DeepCopyFromImplementation(IntPtr from, out object to, Type target_type)
+        public unsafe void DeepCopyFromImplementation(IntPtr from, out object to, Type target_type, bool reset = true)
         {
-            Type t_type = target_type;
-            Type f_type = CreateImplementationType(t_type);
             try
             {
+                if (reset && _level == 0) ClearAllocatedObjects();
+
+                _level++;
+
+                Type t_type = target_type;
+                Type f_type = CreateImplementationType(t_type);
 
                 if (t_type.FullName.Equals("System.Object"))
                 {
@@ -619,15 +661,15 @@ namespace DeepCopyGPU
                 // Map boolean into byte.
                 if (t_type.FullName.Equals("System.Boolean"))
                 {
-                    byte v = *(byte*)from;
-                    to = (System.Boolean)(v == 1 ? true : false);
+                    byte v = *(byte*) from;
+                    to = (System.Boolean) (v == 1 ? true : false);
                     return;
                 }
 
                 // Map char into uint16.
                 if (t_type.FullName.Equals("System.Char"))
                 {
-                    to = (System.Char)from;
+                    to = (System.Char) from;
                     return;
                 }
 
@@ -658,11 +700,12 @@ namespace DeepCopyGPU
                 {
                     // "from" is assumed to be a unmanaged buffer
                     // with three fields, "ptr", "len", "data".
-                    int len = *(int*)((long)(byte*)from + Marshal.SizeOf(typeof(IntPtr)));
-                    IntPtr intptr_src = *(IntPtr*)(from);
-                    byte* ptr = (byte*)intptr_src;
+                    int len = *(int*) ((long) (byte*) from + Marshal.SizeOf(typeof(IntPtr)));
+                    IntPtr intptr_src = *(IntPtr*) (from);
+                    byte* ptr = (byte*) intptr_src;
                     // For now, only one-dimension, given "len".
-                    var to_array = Array.CreateInstance(t_type.GetElementType(), new int[1] { len });
+                    var to_array = Array.CreateInstance(t_type.GetElementType(), new int[1] {len});
+                    _allocated_objects[to_array] = (IntPtr)ptr;
                     Cp((void*) ptr, to_array, t_type.GetElementType());
                     to = to_array;
                     return;
@@ -678,10 +721,10 @@ namespace DeepCopyGPU
                     }
 
                     to = Activator.CreateInstance(t_type);
+                    _allocated_objects[to] = ip;
 
                     System.Reflection.FieldInfo[] ffi = f_type.GetFields();
                     System.Reflection.FieldInfo[] tfi = t_type.GetFields();
-
 
                     for (int i = 0; i < ffi.Length; ++i)
                     {
@@ -692,25 +735,43 @@ namespace DeepCopyGPU
                         if (tfield.FieldType.IsArray)
                         {
                             int field_size = Marshal.SizeOf(typeof(IntPtr));
-                            IntPtr fffff = (IntPtr)Marshal.PtrToStructure<IntPtr>(ip);
-                            DeepCopyFromImplementation(fffff, out object tooo, tfield.FieldType);
-                            tfield.SetValue(to, tooo);
-                            ip = (IntPtr)((long)ip + field_size);
+                            IntPtr ipv = (IntPtr) Marshal.PtrToStructure<IntPtr>(ip);
+                            if (_allocated_objects.ContainsValue(ipv))
+                            {
+                                object tooo = _allocated_objects.Where(p => p.Value == ipv).Select(p => p.Key)
+                                    .FirstOrDefault();
+                                tfield.SetValue(to, tooo);
+                            }
+                            else
+                            {
+                                DeepCopyFromImplementation(ipv, out object tooo, tfield.FieldType);
+                                tfield.SetValue(to, tooo);
+                            }
+                            ip = (IntPtr) ((long) ip + field_size);
                         }
                         else if (tfield.FieldType.IsClass)
                         {
                             int field_size = Marshal.SizeOf(typeof(IntPtr));
-                            IntPtr fffff = (IntPtr)Marshal.PtrToStructure<IntPtr>(ip);
-                            DeepCopyFromImplementation(fffff, out object tooo, tfield.FieldType);
-                            tfield.SetValue(to, tooo);
-                            ip = (IntPtr)((long)ip + field_size);
+                            IntPtr ipv = (IntPtr) Marshal.PtrToStructure<IntPtr>(ip);
+                            if (_allocated_objects.ContainsValue(ipv))
+                            {
+                                object tooo = _allocated_objects.Where(p => p.Value == ipv).Select(p => p.Key)
+                                    .FirstOrDefault();
+                                tfield.SetValue(to, tooo);
+                            }
+                            else
+                            {
+                                DeepCopyFromImplementation(ipv, out object tooo, tfield.FieldType);
+                                tfield.SetValue(to, tooo);
+                            }
+                            ip = (IntPtr) ((long) ip + field_size);
                         }
                         else
                         {
                             int field_size = Marshal.SizeOf(ffield.FieldType);
                             DeepCopyFromImplementation(ip, out object tooo, tfield.FieldType);
                             tfield.SetValue(to, tooo);
-                            ip = (IntPtr)((long)ip + field_size);
+                            ip = (IntPtr) ((long) ip + field_size);
                         }
                     }
 
@@ -724,6 +785,10 @@ namespace DeepCopyGPU
                 System.Console.WriteLine("Exception");
                 System.Console.WriteLine(e);
                 throw e;
+            }
+            finally
+            {
+                _level--;
             }
         }
 

@@ -498,6 +498,23 @@ namespace DeepCopyGPU
                 if (g.Left.Left.Id != n1.Id) throw new Exception("Copy failed.");
                 if (g.Left.Right.Id != n2.Id) throw new Exception("Copy failed.");
             }
+
+            {
+                // Let's try a binary tree.
+                var n1 = new TreeNode() { Left = null, Right = null, Id = 1 };
+                var n2 = new TreeNode() { Left = n1, Right = null, Id = 2 };
+                n1.Left = n2;
+                var f = n1;
+                var bt = buffer.CreateImplementationType(typeof(TreeNode));
+                var size = Marshal.SizeOf(buffer.CreateImplementationType(bt));
+                IntPtr gp = buffer.New(size);
+                buffer.DeepCopyToImplementation(f, gp);
+                buffer.DeepCopyFromImplementation(gp, out object go, f.GetType());
+                var g = (TreeNode)go;
+                if (g.Id != n1.Id) throw new Exception("Copy failed.");
+                if (g.Left.Id != n2.Id) throw new Exception("Copy failed.");
+                if (g.Left.Left.Id != n1.Id) throw new Exception("Copy failed.");
+            }
         }
     }
 }
